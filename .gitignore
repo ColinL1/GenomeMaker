@@ -1,0 +1,7 @@
+Porites_harrisoni_genome
+.vscode/
+temp_ignore
+.nextflow*
+work
+NECAT
+results*
