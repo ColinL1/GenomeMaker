@@ -1,4 +1,4 @@
-# Coral Genome Assembly & Annotation Pipeline
+# GenomeMaker - Coral Genome Assembly & Annotation Pipeline
 
 [![Alpha Release](https://img.shields.io/badge/release-alpha-orange)](https://github.com/your-username/your-repo/releases)
 [![Nextflow](https://img.shields.io/badge/Nextflow-%E2%89%A523.04.0-%233099C1)](https://www.nextflow.io/)
