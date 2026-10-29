@@ -175,8 +175,9 @@ process PARSE_GENOME_SIZE {
         | sed -E 's/^Genome Haploid Length[[:space:]]+([0-9,]+) bp.*/\\1/' \\
         | tr -d ',')
 
-    if [ -z "\$GENOME_SIZE" ]; then
-        echo "ERROR: could not parse Genome Haploid Length from \$SUMMARY" >&2
+    # GenomeScope writes NA when the model does not fit; the sed then leaves the whole line
+    if ! [[ "\$GENOME_SIZE" =~ ^[0-9]+\$ ]]; then
+        echo "ERROR: could not parse Genome Haploid Length from \$SUMMARY (got '\$GENOME_SIZE'); set --genome_size" >&2
         exit 1
     fi
     echo "Parsed genome size: \$GENOME_SIZE bp"

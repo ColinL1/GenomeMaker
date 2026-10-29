@@ -287,7 +287,7 @@ process FUNANNOTATE_ANNOTATE {
     
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        funannotate: "\$(funannotate --version 2>&1 | sed 's/funannotate v//' || echo unknown)"
+        funannotate: "\$(funannotate --version 2>&1 | grep -m1 '^funannotate v' | sed 's/funannotate v//' || echo unknown)"
         container: "${task.container ?: 'conda'}"
     END_VERSIONS
     """

@@ -282,7 +282,7 @@ process CHOPPER_HQ_READS {
 
 // ============================================================
 // Process: CHOPPER_SPLIT
-// Split reads into assembly (longer) and polishing (shorter) sets
+// Split reads into an assembly set (q3, >=1 kb) and a polishing set (q5, >=500 bp)
 // Optionally filter symbiont contamination
 // ============================================================
 process CHOPPER_SPLIT {
@@ -303,36 +303,31 @@ process CHOPPER_SPLIT {
     path "versions.yml", emit: versions
 
     script:
-    def contam_opt = params.skip_symbiont_filter.toString().toBoolean() || !symbiont_ref
+    def contam_opt = !params.run_symbiont_filter.toString().toBoolean() || !symbiont_ref
         ? ''
         : "--contam ${symbiont_ref}"
     def half_cpus = Math.max(1, (task.cpus / 2) as int)
     """
     # ONE decompression, tee'd into BOTH chopper streams, which run concurrently.
-    #
-    # The previous version backgrounded two full pipelines, so the streams were
-    # already parallel -- the waste was decompressing the same ~14.5 GB input
-    # TWICE. tee removes that without serialising anything: both chopper
-    # processes consume the single stream simultaneously.
+    # The assembly stream reads from a FIFO in the background, so its exit status
+    # can be collected with `wait PID` (a >(...) process substitution cannot be).
     #
     # gzip -2 rather than the default -6: these are intermediate read sets that
     # exist only to feed the assembler and the polisher, and this container ships
-    # no pigz/bgzip (verified), so compression is single-threaded per stream.
-    # -2 cuts that cost substantially for a few percent more size, which is the
-    # right trade for a regenerable intermediate. Use a mulled chopper+pigz image
-    # if the compression time ever needs to come down further.
-    (
-      set -o pipefail
-      gunzip -c ${reads_pc} \\
-        | tee >(chopper -q 3 -l 1000 ${contam_opt} --threads ${half_cpus} \\
-                  | gzip -2 > assembly_reads.fastq.gz) \\
-        | chopper -q 5 -l 500 ${contam_opt} --threads ${half_cpus} \\
-          | gzip -2 > polishing_reads.fastq.gz
-    )
+    # no pigz/bgzip, so compression is single-threaded per stream.
+    set -o pipefail
+    mkfifo assembly_stream
+    chopper -q 3 -l 1000 ${contam_opt} --threads ${half_cpus} < assembly_stream \\
+        | gzip -2 > assembly_reads.fastq.gz &
+    assembly_pid=\$!
 
-    # Process substitution is reaped asynchronously, so wait for the tee branch to
-    # finish flushing before the task exits and Nextflow collects the outputs.
-    wait
+    gunzip -c ${reads_pc} \\
+        | tee assembly_stream \\
+        | chopper -q 5 -l 500 ${contam_opt} --threads ${half_cpus} \\
+        | gzip -2 > polishing_reads.fastq.gz
+
+    wait \$assembly_pid
+    rm -f assembly_stream
 
     for f in assembly_reads.fastq.gz polishing_reads.fastq.gz; do
         if [ ! -s "\$f" ]; then
