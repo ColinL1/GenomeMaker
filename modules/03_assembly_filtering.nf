@@ -40,15 +40,10 @@ nextflow.enable.dsl = 2
 // Process: WRITE_META_YAML
 // Build the BlobToolKit meta.yaml describing the assembly.
 //
-// WHY A PROCESS: main.nf used to write this file into ${workDir} directly
-// during DAG construction:
-//     def meta_yaml_file = file("${workDir}/meta_yaml/meta.yaml")
-//     meta_yaml_file.parent.mkdirs()
-//     meta_yaml_file.text = meta_yaml_content
-// That is a side effect at parse time rather than a task, so it is outside
-// Nextflow's provenance and caching, it pollutes the work dir root, and on a
-// resumed run it silently rewrites a file that completed tasks already consumed.
-// As a process it is cached, provenanced and published like everything else.
+// WHY A PROCESS: writing the file during DAG construction would be a parse-time
+// side effect, outside Nextflow's provenance and caching, and rewritten on every
+// resumed run. As a process it is cached, provenanced and published like
+// everything else.
 // ============================================================
 process WRITE_META_YAML {
     tag   "meta_yaml"
@@ -61,15 +56,16 @@ process WRITE_META_YAML {
     path "versions.yml", emit: versions
 
     script:
+    // accessions only when set (they are optional until the NCBI release)
+    def acc = (params.bioproject ? "\n    bioproject: ${params.bioproject}" : '') +
+              (params.biosample ? "\n    biosample: ${params.biosample}" : '')
     """
     # `reads:` declares the coverage library (named after the BAM, coverage.bam,
     # by MINIMAP2_SORT). Without it `blobtools filter --summary` crashes in
     # cov.py (AttributeError: reads) on any BlobDir that has coverage added.
     cat > meta.yaml <<'META'
 assembly:
-    alias: ${params.species_name}
-    bioproject: ${params.bioproject}
-    biosample: ${params.biosample}
+    alias: ${params.species_name}${acc}
     record_type: contig
 taxon:
     name: ${params.species_name}
@@ -126,9 +122,9 @@ META
 //     was against a 47 Mb query. Against a fixed -evalue the search becomes
 //     MORE permissive. BlobTools ranks by bitscore, which is length
 //     independent, so the taxonomic ordering itself is unaffected.
-//   * -max_target_seqs is applied PER QUERY. A 47 Mb scaffold previously
-//     got 10 hits total to represent 47 Mb; it now gets up to 10 per
-//     window. Under the bestsumorder taxrule this means big-scaffold
+//   * -max_target_seqs is applied PER QUERY. Unwindowed, a 47 Mb scaffold
+//     would get 10 hits total to represent 47 Mb; windowed, it gets up to 10
+//     per window. Under the bestsumorder taxrule this means big-scaffold
 //     taxonomy is decided on evidence sampled across the whole scaffold
 //     rather than 10 arbitrary hits. Expect different (better-sampled)
 //     calls for the large scaffolds -- worth stating in methods.
@@ -201,11 +197,9 @@ process PREPARE_BLAST_QUERY {
 //
 // -mt_mode 0 (database split), NOT -mt_mode 1 (query split). MEASURED.
 //
-// This pipeline previously used -mt_mode 1, on the reasoning that windowing
-// "guarantees" many query records for blastn to split across threads. That
-// reasoning does not survive contact with the actual chunks: a 5 MB chunk of the
-// WINDOWED region holds only ~48 records of ~110 kb, i.e. 1.5 records per thread
-// at 32 threads, so there is essentially nothing to split.
+// Windowing does not give mode 1 enough query records to split: a 5 MB chunk of
+// the WINDOWED region holds only ~48 records of ~110 kb, i.e. 1.5 records per
+// thread at 32 threads.
 //
 // Measured on real chunks against core_nt, same 5 MB windowed chunk, 32 threads:
 //     -mt_mode 0 : 17:59, 224 GB peak RSS, 480 hits
@@ -227,14 +221,9 @@ process PREPARE_BLAST_QUERY {
 // pays a full database pass per invocation, so larger chunks would likely amortise
 // better -- but that was not tested, so 5 MB stands.
 //
-// Also note the database changed from full nt to core_nt (264 GB / 80 volumes,
-// vs 723 GB / 246), so the chunk-size tuning in nextflow.config predates the
-// database currently in use.
-//
 // Resources are flat rather than branching on chunk.size(): after
 // windowing, chunks are uniform (params.blastn_chunk_size of many small
-// records), so the old "is this one giant scaffold?" branch no longer has
-// anything to detect.
+// records).
 //
 // The trailing sed restores the parent scaffold ID by stripping the
 // _sliding:<start>-<end> suffix that PREPARE_BLAST_QUERY added, so
@@ -511,10 +500,8 @@ process BLOBTOOLS_CREATE {
 
     conda 'bioconda::blobtoolkit'
     container 'genomehubs/blobtoolkit:4.4.4'
-    // NOT published: this is an intermediate BlobDir state. All four
-    // blobtools steps used to publish `btk` to the SAME directory, so the
-    // 4 GB+ BlobDir was copied four times, each overwriting the last.
-    // Only BLOBTOOLS_ADD_BUSCO -- the final state -- publishes now.
+    // NOT published: this is an intermediate BlobDir state (4 GB+). Only
+    // BLOBTOOLS_ADD_BUSCO -- the final state -- publishes it.
 
     input:
     path assembly
@@ -565,10 +552,8 @@ process BLOBTOOLS_ADD_HITS {
 
     conda 'bioconda::blobtoolkit'
     container 'genomehubs/blobtoolkit:4.4.4'
-    // NOT published: this is an intermediate BlobDir state. All four
-    // blobtools steps used to publish `btk` to the SAME directory, so the
-    // 4 GB+ BlobDir was copied four times, each overwriting the last.
-    // Only BLOBTOOLS_ADD_BUSCO -- the final state -- publishes now.
+    // NOT published: this is an intermediate BlobDir state (4 GB+). Only
+    // BLOBTOOLS_ADD_BUSCO -- the final state -- publishes it.
 
     input:
     path btk
@@ -637,10 +622,8 @@ process BLOBTOOLS_ADD_COV {
 
     conda 'bioconda::blobtoolkit'
     container 'genomehubs/blobtoolkit:4.4.4'
-    // NOT published: this is an intermediate BlobDir state. All four
-    // blobtools steps used to publish `btk` to the SAME directory, so the
-    // 4 GB+ BlobDir was copied four times, each overwriting the last.
-    // Only BLOBTOOLS_ADD_BUSCO -- the final state -- publishes now.
+    // NOT published: this is an intermediate BlobDir state (4 GB+). Only
+    // BLOBTOOLS_ADD_BUSCO -- the final state -- publishes it.
 
     input:
     path btk
