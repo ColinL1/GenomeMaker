@@ -13,7 +13,7 @@ nextflow.enable.dsl = 2
 
 // "<flag> <file>", or nothing for a NO_* placeholder
 def opt_arg(flag, f) {
-    return f.name.startsWith('NO_') ? '' : "${flag} ${f}"
+    return f.baseName.startsWith('NO_') ? '' : "${flag} ${f}"
 }
 
 // NCBI linkage-evidence terms for scaffold gaps (table2asn/tbl2asn -l)
@@ -147,8 +147,8 @@ process FUNANNOTATE_NCBI {
 
     script:
     def args = []
-    if (!iprscan_xml.name.startsWith('NO_'))     args << "--iprscan ${iprscan_xml}"
-    if (!phobius_results.name.startsWith('NO_')) args << "--phobius ${phobius_results}"
+    if (!iprscan_xml.baseName.startsWith('NO_'))     args << "--iprscan ${iprscan_xml}"
+    if (!phobius_results.baseName.startsWith('NO_')) args << "--phobius ${phobius_results}"
     args << "--rename ${params.locus_tag}"
     args << "--sbt ${sbt}"
     if (params.ncbi_isolate)                     args << "--isolate '${params.ncbi_isolate}'"
@@ -460,7 +460,7 @@ process ANNOTATION_QC_GATE {
                params.qc_chrom_prefix ? "--chrom-prefix '${params.qc_chrom_prefix}'" : '',
                params.qc_expected_lineage ? "--expected-lineage '${params.qc_expected_lineage}'" : '',
                params.qc_expected_division ? "--expected-division '${params.qc_expected_division}'" : ''].findAll().join(' ')
-    def has_map = !name_map.name.startsWith('NO_')
+    def has_map = !name_map.baseName.startsWith('NO_')
     def scaffold_args = has_map
         ? "--name-map ${name_map} --agp ${agp} --gap-evidence ${linkage_evidence().replace('-', '_')} " +
           "--gap-length ${params.ragtag_infer_gaps.toString().toBoolean() ? 0 : 100}"

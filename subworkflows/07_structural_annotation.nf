@@ -40,7 +40,7 @@ workflow STRUCTURAL_ANNOTATION {
         TRNASCAN_SE(assembly)
         RNASEQ_TRIM(paired_reads_ch, trimmomatic_adapters)
         STAR_GENOME_INDEX(assembly)
-        STAR_MAPPING(STAR_GENOME_INDEX.out.star_index_dir.first(), RNASEQ_TRIM.out.trimmed_reads)
+        STAR_MAPPING(STAR_GENOME_INDEX.out.star_index_dir, RNASEQ_TRIM.out.trimmed_reads)
         MERGE_BAMS(STAR_MAPPING.out.sample_bam.collect())
 
         // BRAKER4 takes the merged STAR BAM; it reads the transcript strand from the
@@ -89,7 +89,6 @@ workflow STRUCTURAL_ANNOTATION {
         def validated_gff3 = MERGE_ANNOTATIONS.out.gff3
             .combine(GT_GFF3_VALIDATE.out.report)
             .map { gff, _report -> gff }
-            .first()
 
         // ---- Refinement (07c), BEFORE protein extraction: every consumer below
         // (proteins, OMArk, StringTie, functional annotation, NCBI files) gets the
@@ -97,7 +96,7 @@ workflow STRUCTURAL_ANNOTATION {
         TRNA_HC_FILTER(TRNASCAN_SE.out.trnascan_out, TRNASCAN_SE.out.trnascan_tbl)
         versions_ch = versions_ch.mix(TRNA_HC_FILTER.out.versions)
 
-        def braker_res = BRAKER4_RUN.out.braker_results.first()
+        def braker_res = BRAKER4_RUN.out.braker_results
         def haplotig_tags = channel.value(file("${projectDir}/assets/NO_HAPLOTIG_TAGS", checkIfExists: true))
         if (params.run_haplotig_scan.toString().toBoolean()) {
             HAPLOTIG_LONGEST(braker_res)
@@ -145,7 +144,6 @@ workflow STRUCTURAL_ANNOTATION {
         def refined_gff3 = models_gff3
             .combine(GT_VALIDATE_REFINED.out.report.collect().map { _r -> 'validated' })
             .map { gff, _ok -> gff }
-            .first()
 
         EXTRACT_PROTEINS(refined_gff3, assembly)
 

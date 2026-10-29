@@ -448,7 +448,7 @@ process MERGE_ANNOTATIONS {
     script:
     // Output names are derived from species_name and version.
     def gff_out = "${params.species_name}.v${params.version}.gff3"
-    def use_rfam = !ncrna_tblout.name.startsWith('NO_') && !rfam_family.name.startsWith('NO_')
+    def use_rfam = !ncrna_tblout.baseName.startsWith('NO_') && !rfam_family.baseName.startsWith('NO_')
     """
     # GTF -> GFF3. (agat_sp_convert_format.pl does not exist in AGAT;
     # agat_convert_sp_gxf2gxf.pl is its GTF/GFF -> GFF3 converter.)

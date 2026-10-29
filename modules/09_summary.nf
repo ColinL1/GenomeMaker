@@ -253,7 +253,7 @@ process MULTIQC_FINAL {
     path "versions.yml", emit: versions
 
     script:
-    def config_arg = (multiqc_config && multiqc_config.name != 'NO_FILE') ? "-c ${multiqc_config}" : ""
+    def config_arg = (multiqc_config && multiqc_config.baseName != 'NO_FILE') ? "-c ${multiqc_config}" : ""
     """
     multiqc qc_inputs \\
         --force \\
@@ -291,7 +291,7 @@ process MULTIQC_FINAL {
 
 // Optional file input: '--flag path', or nothing for a NO_ placeholder
 def opt_flag(flag, f) {
-    return (f && !f.name.startsWith('NO_')) ? "${flag} ${f}" : ''
+    return (f && !f.baseName.startsWith('NO_')) ? "${flag} ${f}" : ''
 }
 
 // ============================================================
@@ -326,8 +326,8 @@ process GENOME_SUMMARY {
     path "summary.tsv", emit: summary
 
     script:
-    def has_anno = anno && !anno.name.startsWith('NO_')
-    def gff_arg  = (gff && !gff.name.startsWith('NO_')) ? "--gff ${gff}" : (has_anno ? '--gff "$(ls anno/*/annotate_results/*.gff3 | grep -v \'\\.hc\\.\' | head -1)"' : '')
+    def has_anno = anno && !anno.baseName.startsWith('NO_')
+    def gff_arg  = (gff && !gff.baseName.startsWith('NO_')) ? "--gff ${gff}" : (has_anno ? '--gff "$(ls anno/*/annotate_results/*.gff3 | grep -v \'\\.hc\\.\' | head -1)"' : '')
     def anno_args = has_anno
         ? '--stats "$(ls anno/*/annotate_results/*.stats.json | head -1)" --annotations "$(ls anno/*/annotate_results/*.annotations.txt | head -1)"'
         : ''

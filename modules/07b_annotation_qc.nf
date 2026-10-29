@@ -46,7 +46,7 @@ process COMPLEASM {
     script:
     // compleasm keeps its lineage data in a download directory; pointing it at a
     // pre-populated one keeps this offline, exactly as BUSCO's --offline does.
-    def db_arg = (compleasm_db && !compleasm_db.name.startsWith('NO_')) ? "-L ${compleasm_db}" : ""
+    def db_arg = (compleasm_db && !compleasm_db.baseName.startsWith('NO_')) ? "-L ${compleasm_db}" : ""
     """
     compleasm run \\
       -a ${assembly} \\

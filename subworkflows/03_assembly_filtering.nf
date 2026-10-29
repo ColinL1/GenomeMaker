@@ -158,9 +158,12 @@ workflow ASSEMBLY_FILTERING {
 
                 BLOBTOOLS_APPLY_FILTER(apply_input)
 
+                // one category per task, so a queue: first() makes the host bin a value channel
+                // like the PASSTHROUGH and unfiltered branches
                 filtered = BLOBTOOLS_APPLY_FILTER.out.filtered_assembly
                     .filter { category, path -> category == 'host' }
                     .map    { category, path -> path }
+                    .first()
 
                 symbiont = BLOBTOOLS_APPLY_FILTER.out.filtered_assembly
                     .filter { category, path -> category == 'symbiont' }

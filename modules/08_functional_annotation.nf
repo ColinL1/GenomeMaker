@@ -257,8 +257,8 @@ process FUNANNOTATE_ANNOTATE {
     // data directory that may not be installed, and Phobius is licence-restricted
     // so its image is not always pullable. Both arrive as a NO_FILE placeholder
     // when skipped -- the same pattern MULTIQC_FINAL uses for its optional config.
-    def ipr_arg = (iprscan_xml     && !iprscan_xml.name.startsWith('NO_'))     ? "--iprscan ${iprscan_xml}"     : ""
-    def pho_arg = (phobius_results && !phobius_results.name.startsWith('NO_')) ? "--phobius ${phobius_results}" : ""
+    def ipr_arg = (iprscan_xml     && !iprscan_xml.baseName.startsWith('NO_'))     ? "--iprscan ${iprscan_xml}"     : ""
+    def pho_arg = (phobius_results && !phobius_results.baseName.startsWith('NO_')) ? "--phobius ${phobius_results}" : ""
     //
     // --busco_db must be a lineage inside FUNANNOTATE_DB. funannotate 1.x only
     // supports its own odb9-era sets (metazoa, dikarya, ...), not odb12, so it

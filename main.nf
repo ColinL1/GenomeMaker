@@ -163,7 +163,12 @@ workflow CORAL_GENOME_PIPELINE {
     // only the task work directory is bound and these paths are invisible
     // to the container even though they resolve fine outside of Nextflow.
     def blast_db_path      = file(params.blast_db)
-    def blast_taxdump_path = file("${blast_db_path.getParent()}/new_taxdump")
+    def blast_taxdump_path = file(params.blast_taxdump ?: "${blast_db_path.getParent()}/new_taxdump")
+    if (params.run_blobtools.toString().toBoolean() && !workflow.stubRun) {
+        if (!file("${blast_taxdump_path}/nodes.dmp").exists()) {
+            error "BlobToolKit needs the NCBI new_taxdump folder: ${blast_taxdump_path} has no nodes.dmp. Set --blast_taxdump"
+        }
+    }
     def diamond_db_path    = file(params.diamond_db)
     def trimmomatic_adapters_path = file(params.trimmomatic_adapters)
 
@@ -388,7 +393,7 @@ workflow CORAL_GENOME_PIPELINE {
             MITOGENOME_PIPELINE.out.mito_contig_ids.ifEmpty(file("${projectDir}/assets/NO_MITO_IDS", checkIfExists: true)),
             MITOGENOME_PIPELINE.out.mito_contig_stats.ifEmpty(file("${projectDir}/assets/NO_MITO_STATS", checkIfExists: true)),
             mito_ref_path)
-        nuclear_contigs_ch = REMOVE_MITO_CONTIGS.out.fasta.first()
+        nuclear_contigs_ch = REMOVE_MITO_CONTIGS.out.fasta
         mito_removed_ch    = REMOVE_MITO_CONTIGS.out.report
         versions_ch        = versions_ch.mix(REMOVE_MITO_CONTIGS.out.versions)
     } else {
@@ -441,7 +446,7 @@ workflow CORAL_GENOME_PIPELINE {
         blast_taxdump_path,
         diamond_db_path
     )
-    def host_ch              = ASSEMBLY_FILTERING.out.filtered_assembly.first()
+    def host_ch              = ASSEMBLY_FILTERING.out.filtered_assembly
     def symbiont_assembly_ch = ASSEMBLY_FILTERING.out.symbiont_assembly
     versions_ch = versions_ch.mix(ASSEMBLY_FILTERING.out.versions)
 
@@ -491,7 +496,7 @@ workflow CORAL_GENOME_PIPELINE {
         log.warn "purge_dups SKIPPED (run_purge_dups=false): haplotigs are not removed"
     }
     LENGTH_FILTER(purged_ch, purge_gate_ch)
-    def contigs_ch = LENGTH_FILTER.out.fasta.first()
+    def contigs_ch = LENGTH_FILTER.out.fasta
     versions_ch = versions_ch.mix(LENGTH_FILTER.out.versions)
 
     // ===========================
@@ -520,16 +525,16 @@ workflow CORAL_GENOME_PIPELINE {
     def name_map_ch  = channel.value(file("${projectDir}/assets/NO_NAME_MAP", checkIfExists: true))
     if (params.scaffold_reference) {
         RAGTAG_SCAFFOLD(screened_ch, file(params.scaffold_reference, checkIfExists: true))
-        scaffolds_ch = RAGTAG_SCAFFOLD.out.scaffolds.first()
-        agp_ch       = RAGTAG_SCAFFOLD.out.agp.first()
+        scaffolds_ch = RAGTAG_SCAFFOLD.out.scaffolds
+        agp_ch       = RAGTAG_SCAFFOLD.out.agp
         versions_ch  = versions_ch.mix(RAGTAG_SCAFFOLD.out.versions)
     }
     FUNANNOTATE_SORT(scaffolds_ch, params.scaffold_basename)
-    def final_assembly_ch = FUNANNOTATE_SORT.out.final_assembly.first()
+    def final_assembly_ch = FUNANNOTATE_SORT.out.final_assembly
     versions_ch = versions_ch.mix(FUNANNOTATE_SORT.out.versions)
     if (params.scaffold_reference) {
         SCAFFOLD_NAME_MAP(scaffolds_ch, final_assembly_ch)
-        name_map_ch = SCAFFOLD_NAME_MAP.out.map.first()
+        name_map_ch = SCAFFOLD_NAME_MAP.out.map
     }
 
     // CHECKPOINT of the final assembly: the numbers the summary and the methods report
@@ -629,8 +634,8 @@ workflow CORAL_GENOME_PIPELINE {
     report_files_ch = report_files_ch.mix(screen_qc_ch, mito_removed_ch, LENGTH_FILTER.out.removed, ranking_table_ch)
 
     // The final assembly as delivered: soft-masked when repeats ran
-    def delivered_fasta_ch = params.run_repeats.toString().toBoolean() ? masked_assembly_ch.first() : final_assembly_ch
-    def anno_or_none_ch    = run_functional ? anno_dir_ch.first() : channel.value(no_file('NO_FILE'))
+    def delivered_fasta_ch = params.run_repeats.toString().toBoolean() ? masked_assembly_ch : final_assembly_ch
+    def anno_or_none_ch    = run_functional ? anno_dir_ch : channel.value(no_file('NO_FILE'))
 
     // ---- summary.tsv of the automatic product (final/qc/)
     GENOME_SUMMARY(
@@ -638,13 +643,13 @@ workflow CORAL_GENOME_PIPELINE {
         delivered_fasta_ch,
         anno_or_none_ch,
         no_file('NO_FILE'),                                     // GFF3: the funannotate one in anno
-        compleasm_ch.ifEmpty(no_file('NO_FILE')).first(),
-        CHECKPOINT_FINAL.out.busco_summary.first(),
-        final_qv_ch.ifEmpty(no_file('NO_QV')).first(),
-        repeat_summary_ch.ifEmpty(no_file('NO_FILE')).first(),   // RepeatMasker .tbl
+        compleasm_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        CHECKPOINT_FINAL.out.busco_summary,
+        final_qv_ch.collect().ifEmpty([no_file('NO_QV')]),
+        repeat_summary_ch.collect().ifEmpty([no_file('NO_FILE')]),   // RepeatMasker .tbl
         no_file('NO_FILE'),                                     // high-confidence subset: release curation only
-        mito_fasta_ch.ifEmpty(no_file('NO_MITO_FASTA')).first(),
-        mito_check_ch.ifEmpty(no_file('NO_MITO_CHECK')).first(),
+        mito_fasta_ch.collect().ifEmpty([no_file('NO_MITO_FASTA')]),
+        mito_check_ch.collect().ifEmpty([no_file('NO_MITO_CHECK')]),
         no_file('NO_SYMBIONT_BUSCO')                            // symbiont BUSCO: release curation only
     )
     def summary_tsv_ch = GENOME_SUMMARY.out.summary
@@ -655,7 +660,7 @@ workflow CORAL_GENOME_PIPELINE {
     // ===========================
     if (run_release) {
         RELEASE(
-            masked_assembly_ch.first(),
+            masked_assembly_ch,
             name_map_ch,
             agp_ch,
             screened_ch,
@@ -680,7 +685,7 @@ workflow CORAL_GENOME_PIPELINE {
             mito_fasta_ch,
             mito_gff_ch,
             mito_check_ch,
-            CHECKPOINT_FINAL.out.busco_summary.first(),
+            CHECKPOINT_FINAL.out.busco_summary,
             final_qv_ch,
             compleasm_ch,
             screen_qc_ch
@@ -704,13 +709,13 @@ workflow CORAL_GENOME_PIPELINE {
     METHODS(
         methods_tpl_ch,
         versions_ch.collectFile(name: 'all_versions.yml', newLine: true, sort: { f -> f.text }),
-        ranking_table_ch.ifEmpty(no_file('NO_FILE')).first(),
-        polish_report_ch.ifEmpty(no_file('NO_FILE')).first(),
-        polish_decision_ch.ifEmpty(no_file('NO_FILE')).first(),
-        purge_report_ch.ifEmpty(no_file('NO_FILE')).first(),
-        mito_removed_ch.ifEmpty(no_file('NO_FILE')).first(),
-        LENGTH_FILTER.out.removed.first(),
-        screen_qc_ch.filter { f -> f.name == 'screen_actions.tsv' }.ifEmpty(no_file('NO_FILE')).first()
+        ranking_table_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        polish_report_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        polish_decision_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        purge_report_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        mito_removed_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        LENGTH_FILTER.out.removed,
+        screen_qc_ch.filter { f -> f.name == 'screen_actions.tsv' }.collect().ifEmpty([no_file('NO_FILE')])
     )
     report_files_ch = report_files_ch.mix(METHODS.out.methods)
 
@@ -810,7 +815,7 @@ workflow CORAL_GENOME_PIPELINE {
         anno_or_none_ch,
         repeat_files_ch.collect().ifEmpty([no_file('NO_FILE')]),
         mito_fasta_ch.mix(mito_gff_ch, mito_check_ch).collect().ifEmpty([no_file('NO_MITO_FASTA')]),
-        symbiont_assembly_ch.ifEmpty(no_file('NO_FILE')).first(),
+        symbiont_assembly_ch.collect().ifEmpty([no_file('NO_FILE')]),
         final_qc_ch,
         RUN_SUMMARY.out.report
     )

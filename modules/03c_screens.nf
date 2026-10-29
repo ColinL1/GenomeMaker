@@ -173,7 +173,7 @@ process SCREEN_REVIEW {
     path "review/screen_review.tsv", emit: review
 
     script:
-    def dec = decisions.name.startsWith('NO_') ? '' : "--decisions ${decisions}"
+    def dec = decisions.baseName.startsWith('NO_') ? '' : "--decisions ${decisions}"
     """
     # exit status 3 = undecided items; reported by APPLY_SCREEN_ACTIONS after publishing
     screen_review.py --fcs-gx ${gx_report} --vecscreen ${vec_regions} ${dec} --outdir review || [ \$? -eq 3 ]

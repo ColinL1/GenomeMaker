@@ -125,9 +125,9 @@ workflow RELEASE {
 
         // ---- summary.tsv of the released files, QC gate, folder
         def repeat_tbl = repeat_files.flatten().filter { f -> f.name.endsWith('.tbl') }.first()
-        def qv_file = qv.ifEmpty(no_file('NO_QV')).first()
+        def qv_file = qv.collect().ifEmpty([no_file('NO_QV')])
         RELEASE_SUMMARY('release_curation', assembly, anno_ch, rel_gff,
-                        compleasm.ifEmpty(no_file('NO_COMPLEASM_DB')).first(), busco_summary, qv_file, repeat_tbl,
+                        compleasm.collect().ifEmpty([no_file('NO_COMPLEASM_DB')]), busco_summary, qv_file, repeat_tbl,
                         sets_report, mito_fasta.ifEmpty(no_file('NO_MITO_FASTA')).first(),
                         mito_check.ifEmpty(no_file('NO_MITO_CHECK')).first(), sym_summary)
 
