@@ -29,34 +29,58 @@
   - [Multi-Assembler Comparison](#multi-assembler-comparison)
   - [Stage Toggles and Dependencies](#stage-toggles-and-dependencies)
   - [Contamination Screens](#contamination-screens)
-  - [NCBI Release](#ncbi-release)
+  - [Release Curation](#release-curation)
   - [Output Structure](#output-structure)
-    - [Release folder](#release-folder)
+    - [Release curation folder](#release-curation-folder)
   - [License](#license)
 
 ---
 
 ## Pipeline Overview
 
+Two ways in, two ways out:
+
+- **Mode**: from ONT reads (stages 00 → 01 → 02 → 02b), or from an existing assembly with `--input_assembly` (00 → 02c). Both join at the mitochondrial-contig check; everything after is the same.
+- **Strategy**: *automatic* (default): every stage through functional annotation, written to `final/`; or *automatic + release curation* (`--run_release true`): the same, plus rule-based curation and the NCBI submission in `release_curation/<release_name>/`. `final/` is written in both strategies.
+
+```text
+ MODE: from reads                                   MODE: --input_assembly
+ 00 reads -> 01 k-mer size -> 02 assemblers -> 02b ranking      00 reads -> 02c QC of the assembly
+                       └──────────────────────┬──────────────────────┘
+                       05 MitoHiFi: mito contigs removed (rest of 05: the mitogenome, side branch)
+                       04 Medaka + polish QC gate                        (run_polish)
+                       03 BlobToolKit split: host | symbiont bin | other
+                       03b purge_dups on the host bin + purge QC gate    (run_purge_dups)
+                           length filter (>= 200 bp)
+                       03c contamination screens: last step that changes bases (run_screens)
+                       03d RagTag (scaffold_reference) -> sort / rename
+                       06 repeats -> 07 gene models (+07c refinement) -> 08 functional annotation
+                       └──────────────────────┬──────────────────────┘
+       STRATEGY automatic                     │          STRATEGY + release curation (run_release)
+       final/                                 │          10 product curation -> table2asn -> release QC gate
+                                              │          release_curation/<release_name>/   (and final/)
+                       09 summary + MultiQC (run overview, gates, methods), copied into both folders
+```
+
 | Stage | Module | Description |
 |-------|--------|-------------|
 | **00** | `00_preprocess_reads` | Porechop adapter removal, FastQC/NanoPlot/NanoStat QC, chopper read sets (assembly, polishing, high-quality k-mer reads), optional symbiont read removal (chopper `--contam`) |
 | **01** | `01_kmer_genome_size` | Meryl k-mer database and histogram, GenomeScope 2 genome size estimate |
 | **02** | `02_multi_assembler` | Parallel assembly with NECAT, Flye, hifiasm and/or Raven; BUSCO, gfastats and QUAST per assembly |
-| **02b** | `02b_select_best_assembly` | Ranks the assemblies (BUSCO completeness with a duplication penalty, N50 within a tie band, genome-size outliers ranked last) and picks one |
+| **02b** | `02b_select_best_assembly` | Ranks the assemblies: size outliers last; within the BUSCO tie band the assembly closest to the expected size wins; N50 breaks a size tie |
 | **02c** | `02c_input_assembly_qc` | Replaces 01-02b when an existing assembly is given with `--input_assembly` |
-| **03b** | `03b_purge_dups` | Haplotig removal with purge_dups (ONT coverage), followed by a BUSCO + gfastats checkpoint |
-| **03** | `03_assembly_filtering` | BlobToolKit host filter (BLASTN vs nt, DIAMOND vs UniProt, ONT coverage, BUSCO); splits off a symbiont bin |
+| **05** | `05_mitogenome` | MitoHiFi finds the mito contig in the selected assembly; it is removed from the nuclear assembly. The mitogenome itself: MitoHiFi contig + Medaka (ONT) or GetOrganelle (Illumina DNA), rotation, Liftoff and MITOS2, adaptor/vector screens |
+| **04** | `04_assembly_polish` | Medaka on the contigs; Merqury QV and BUSCO before and after; the unpolished contigs go on if polishing makes them worse |
+| **03** | `03_assembly_filtering` | BlobToolKit split (BLASTN vs nt, DIAMOND vs UniProt, ONT coverage, BUSCO) on the unpurged contigs: host, symbiont bin, other |
+| **03b** | `03b_purge_dups` | purge_dups on the host bin; the purge QC gate (BUSCO before/after) stops the run when it removes BUSCO genes; length filter |
 | **03c** | `03c_screens` | NCBI contamination screens: FCS-adaptor, VecScreen (UniVec), FCS-GX; unclear hits are reviewed before actions are applied |
-| **03d** | `03d_scaffold` | Optional reference-guided scaffolding with RagTag |
-| **04** | `04_assembly_polish` | Medaka polishing, funannotate clean/sort; Merqury QV, BUSCO and gfastats before and after; the unpolished assembly is kept if polishing makes it worse |
-| **05** | `05_mitogenome` | Mitogenome with MitoHiFi (ONT) or GetOrganelle (Illumina DNA), Medaka polishing, rotation, Liftoff and MITOS2 annotation, adaptor/vector screens |
+| **03d** | `03d_scaffold` | Optional RagTag scaffolding, then sort and rename (`scaffold_1..N`); with RagTag, the scaffold name map |
 | **06** | `06_repeats` | RepeatModeler + EDTA library, RepeatClassifier for unknown families, RepeatMasker soft-masking, barrnap rRNA |
 | **07** | `07_structural_annotation` | RNA-seq trimming and STAR mapping, BRAKER4 gene prediction, tRNAscan-SE, Infernal/Rfam ncRNAs, StringTie, AGAT merge and GFF3 validation, compleasm and OMArk |
 | **07c** | `07c_annotation_refine` | Gene-model refinement: UTRs, gene membership, tRNA/ncRNA filters, haplotig and gap-fusion scans, isoform filter, protein identity check |
 | **08** | `08_functional_annotation` | InterProScan, eggNOG-mapper, Phobius, funannotate annotate |
-| **10** | `10_release` | Optional: product-name curation, table2asn NCBI submission, release QC checks, release folder with README |
-| **09** | `09_summary` | Summary tables, software versions and an integrated MultiQC report (runs last, after the release) |
+| **10** | `10_release` | Release curation (optional): product-name curation, table2asn NCBI submission, release QC gate, release folder |
+| **09** | `09_summary` | summary.tsv, methods, software versions and the integrated MultiQC report; the `final/` folder |
 
 ---
 
@@ -106,7 +130,7 @@ Most defaults in `nextflow.config` point into a `config/` folder in the pipeline
 | `--funannotate_db`, `--eggnog_db` | funannotate and eggNOG-mapper databases |
 | `--omamer_db` | OMAmer database for OMArk |
 | `--rfam_cm`, `--rfam_clanin`, `--rfam_family` | Rfam covariance models (cmpress'd), clan file and family table |
-| `--mito_ref` | Reference mitogenome for read recruitment |
+| `--mito_ref` | Related mitogenome: MitoHiFi finds the mito contig with it (mitogenome, and its removal from the nuclear assembly); also read recruitment |
 | `--mito_annot_ref_fasta`, `--mito_annot_ref_gff` | Annotated related mitogenome for Liftoff (`false` = MITOS2 only) |
 
 ---
@@ -149,7 +173,7 @@ nextflow run main.nf -profile binac2 \
     --outdir results
 ```
 
-This skips stages 01-02b. ONT reads are still required for purge_dups, BlobToolKit coverage, polishing and the mitogenome.
+This skips stages 01-02b. ONT reads are still required for polishing, BlobToolKit coverage, purge_dups and the mitogenome. An assembly that is already curated can skip steps: `--run_polish false`, `--run_purge_dups false`.
 
 ### Profiles
 
@@ -177,7 +201,8 @@ The full list, with comments, is in `nextflow.config`. The most used ones:
 | `--outdir` | `results` | Output directory |
 | `--species_name` | `Porites_sp` | Name used in output file names |
 | `--symbiont_refs` | `null` | Symbiont reference genome(s) for read removal (comma-separated) |
-| `--genome_size` | `null` | Genome size in bp; null = GenomeScope 2 estimate |
+| `--genome_size` | `null` | Haploid genome size in bp; null = GenomeScope 2 estimate (one of the two is required from reads) |
+| `--version` | `1.0` | Version of the assembly + annotation (GFF3 file name) |
 | `--busco_lineage` | `anthozoa_odb12` | BUSCO lineage for all assembly QC and BRAKER4 |
 
 ### Assembly and filtering
@@ -185,10 +210,13 @@ The full list, with comments, is in `nextflow.config`. The most used ones:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--assemblers` | `['flye','hifiasm','raven']` | Any of `necat`, `flye`, `hifiasm`, `raven` |
-| `--busco_tie_band` | `0.5` | BUSCO difference (percentage points) treated as a tie, decided by N50 |
-| `--assembly_size_tolerance` | `0.30` | Deviation from the size estimate before an assembly is ranked last |
-| `--purge_dups_transition` | `null` | calcuts haploid/diploid transition; null = automatic |
-| `--taxon_id` | `46719` | Taxon ID of the BlobToolKit dataset |
+| `--busco_tie_band` | `2.0` | BUSCO completeness difference (percentage points) treated as a tie; within it the assembly closest to the expected size wins |
+| `--assembly_size_tolerance` | `0.30` | Deviation from the expected size before an assembly is ranked last |
+| `--mito_contig_max_ratio` | `3` | MitoHiFi-listed contigs longer than this many times the reference mitogenome stay in the nuclear assembly |
+| `--purge_dups_lower`, `--purge_dups_transition`, `--purge_dups_upper` | `null` | calcuts cutoffs; null = automatic |
+| `--purge_busco_tolerance` | `1.0` | Purge QC gate: BUSCO completeness drop (pp) that stops the run |
+| `--min_contig_length` | `200` | Sequences shorter than this are removed after purging |
+| `--taxon_id` | `46719` | NCBI taxid of the organism (BlobToolKit dataset and FCS-GX `--tax-id`) |
 | `--host_taxon_name` / `--symbiont_taxon_name` | `Cnidaria` / `Symbiodiniaceae` | BlobToolKit taxa kept as host and symbiont |
 | `--auto_filter` | `true` | Automatic best-hit taxon filter |
 | `--filter_json` | `null` | Manual selection exported from the BlobToolKit Viewer, used instead of the automatic filter |
@@ -199,10 +227,10 @@ The full list, with comments, is in `nextflow.config`. The most used ones:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--rnaseq_strandedness` | `reverse` | `unstranded`, `forward` or `reverse` |
 | `--funannotate_busco_db` | `metazoa` | BUSCO set inside the funannotate database |
 | `--related_proteomes` | `null` | Folder of related-species protein FASTA files; enables the gap-fusion split and the isoform filter |
-| `--n_chromosome_scaffolds` | `null` | Number of chromosome-scale scaffolds (`scaffold_1..N` after sorting) |
+| `--n_chromosome_scaffolds` | `null` | Number of chromosome-scale scaffolds (`scaffold_1..N` after sorting); needed by `--run_haplotig_scan` |
+| `--run_haplotig_scan` | `false` | Tag genes with a near-identical copy on a chromosome scaffold |
 | `--transcript_edits` | `null` | TSV of manual transcript edits (drop a transcript or replace its CDS) |
 | `--rm_libraries` | `null` | RepeatMasker `Libraries/` folder with Dfam partitions for RepeatClassifier |
 
@@ -246,131 +274,101 @@ nextflow run main.nf -profile binac2 \
 | Parameter | Default | Effect |
 |-----------|---------|--------|
 | `--run_genomescope` | `true` | GenomeScope 2 size estimate (ignored with `--genome_size`) |
-| `--skip_porechop` | `false` | Use the raw reads without adapter removal |
-| `--skip_symbiont_filter` | `false` | Keep reads matching `--symbiont_refs` |
-| `--skip_blobtools` | `false` | No BlobToolKit host filter |
-| `--run_assembly_checkpoints` | `true` | BUSCO + gfastats after the host filter |
+| `--run_porechop` | `true` | Porechop adapter removal |
+| `--run_symbiont_filter` | `true` | Remove reads matching `--symbiont_refs` |
+| `--run_mitogenome` | `true` | Mitogenome, and the removal of mito contigs from the nuclear assembly (needs `--mito_ref`) |
+| `--run_polish` | `true` | Medaka polishing of the contigs |
+| `--run_polish_qc` | `true` | Polish QC gate (QV/BUSCO before and after); also the final Merqury QV |
+| `--run_blobtools` | `true` | BlobToolKit host/symbiont split |
+| `--run_purge_dups` | `true` | purge_dups on the host bin, with its QC gate |
+| `--run_assembly_checkpoints` | `true` | BUSCO + gfastats after the split (always on with purge_dups: the purge gate needs it) |
 | `--run_screens` | `true` | NCBI contamination screens |
-| `--run_polish_qc` | `true` | QV/BUSCO comparison before and after polishing |
-| `--run_mitogenome` | `true` | Mitogenome (also needs `--mito_ref`) |
 | `--run_repeats` | `true` | Repeat library and soft-masking |
 | `--run_structural_annotation` | `true` | Gene prediction (needs `--run_repeats`, `--rnaseq_dir` and `--protein_refs`) |
+| `--run_compleasm` | `true` | compleasm on the final assembly |
 | `--run_functional_annotation` | `true` | Functional annotation (needs structural annotation) |
-| `--run_release` | `false` | NCBI submission and release folder (needs functional annotation) |
+| `--run_release` | `false` | Release curation: NCBI submission and release folder (needs structural and functional annotation) |
 
-```
-00 Preprocessing
- ├── 01 K-mer size estimate ── 02 Assembly ── 02b Selection      (or 02c with --input_assembly)
- │                                               │
- │                                    03b purge_dups ── 03 BlobToolKit ── 03c Screens ── 03d RagTag
- │                                                                                         │
- │                                                                                  04 Polishing
- │                                                                                         │
- ├── 05 Mitogenome (needs --mito_ref)                                              06 Repeats
- │                                                                                         │
- │                                                     07 Structural annotation (+07c refinement)
- │                                                                                         │
- │                                                                  08 Functional annotation
- │                                                                                         │
- │                                                                         10 Release (optional)
- └──────────────────────────────────────────────────────────────────────── 09 Summary + MultiQC
-```
+A stage that is switched on but cannot run stops the run at start-up, before any task: a missing `--rnaseq_dir`, `--protein_refs` or `--mito_ref`, structural annotation without repeats, functional annotation without structural annotation, the release curation without annotation, no expected genome size for the assembler ranking, the haplotig scan without `--n_chromosome_scaffolds`, and missing screen or NCBI settings. Nothing is skipped silently.
 
-Structural annotation is skipped when `--rnaseq_dir` or `--protein_refs` does not exist. The run stops at start-up if structural annotation is on and repeats are off, because BRAKER4 needs the soft-masked assembly.
+The automatic decisions (assembler ranking, polish gate, purge gate, mito contigs, length filter, screen actions) are listed in the MultiQC run overview and in the methods (`qc/methods.md`).
 
 ---
 
 ## Contamination Screens
 
-With `--run_screens true` (default) the host-filtered contigs go through FCS-adaptor, VecScreen and FCS-GX before scaffolding. Required: `--univec`, `--fcs_gx_db`, `--fcs_adaptor_image`, `--fcs_gx_image` and `--fcs_tax_id` (must be in the GX database). The run checks these at start-up.
+With `--run_screens true` (default) the purged, length-filtered contigs go through FCS-adaptor, VecScreen and FCS-GX before scaffolding; no later step changes a base (RagTag adds gaps, the sort renames; the release QC checks this). Required: `--univec`, `--fcs_gx_db`, `--fcs_adaptor_image`, `--fcs_gx_image` and `--taxon_id` (must be in the GX database). The run checks these at start-up.
 
 Clear-cut hits are applied automatically. Unclear hits (FCS-GX REVIEW, VecScreen Strong/Moderate) stop the run and are listed in `03c_screens/contigs/review/screen_review.tsv`. Decide them in a TSV (`seq`, `start`, `end`, `decision` = `exclude` | `mask` | `keep`, `reason`), pass it with `--screen_decisions`, and resume with `-resume`.
 
 ---
 
-## NCBI Release
+## Release Curation
 
-`--run_release true` builds a table2asn submission and a release folder. Required: `--table2asn`, `--ncbi_species` (exactly as in the BioSample), `--locus_tag`, `--ncbi_sbt`, `--ncbi_cmt`, `--bioproject`, `--biosample`, and `--ncbi_isolate` or `--ncbi_strain`. These are checked at start-up.
+`--run_release true` adds rule-based curation to the automatic run and builds a table2asn submission and a release folder, `release_curation/<release_name>/`. The rules are the same for every genome; their effect differs between genomes, so check the release QC gate and the table2asn tables in the MultiQC report. Required: `--table2asn`, `--ncbi_species` (exactly as in the BioSample), `--locus_tag`, `--ncbi_sbt`, `--ncbi_cmt`, `--bioproject`, `--biosample`, and `--ncbi_isolate` or `--ncbi_strain`. These are checked at start-up.
 
 Useful options:
 
 | Parameter | Description |
 |-----------|-------------|
-| `--release_name`, `--release_version` | Release folder name and version |
-| `--release_notes` | Markdown file added to the release README as "Known limitations" |
+| `--release_name` | Release folder name |
 | `--product_draft` | TSV of checked product names (symbol to product), used before the UniProt lookup |
 | `--product_cache`, `--uniprot_offline` | Reuse a UniProt lookup cache; offline mode uses only the cache |
 | `--symbiont_busco_lineage` | BUSCO lineage for the symbiont bin |
 | `--ncbi_linkage_evidence` | Scaffold-gap linkage evidence (default `align-genus` with RagTag) |
 | `--qc_expected_lineage`, `--qc_expected_division`, `--qc_chrom_prefix` | Expectations for the release QC checks |
 
-Before the folder is written, the release QC checks validate the models, protein identity, the protein-coding count across all reports, scaffold names, repeat labels, the screens and the table2asn reports. Any failed check stops the run; the results are in `qc/annotation_qc.tsv`.
+Before the folder is written, the release QC gate checks the models, protein identity, the protein-coding count (funannotate, release GFF3, summary.tsv), scaffold names and the AGP (with RagTag), that the released sequence equals the screened contigs apart from gaps and names, repeat labels, the screens and the table2asn reports. Any failed check stops the run; the results are in `qc/annotation_qc.tsv` and in the MultiQC report.
 
 ---
 
 ## Output Structure
 
-```
+The two folders to use are `final/` (always) and, with the release curation, `release_curation/<release_name>/`. Everything else is the per-stage record.
+
+```text
 outdir/
-├── 00_preprocessing/
-│   ├── porechop/                    # adapter-trimmed reads
-│   └── reads/                       # assembly, polishing and k-mer read sets, read QC
-├── 01_kmer_genome_size/
-│   ├── meryl/                       # k-mer database and histogram
-│   └── genomescope/                 # genome size and heterozygosity model
-├── 02_assembly/
-│   ├── flye/ hifiasm/ raven/ necat/ # one folder per assembler
-│   ├── qc/{busco,gfastats,quast}/   # per-assembly QC
-│   ├── comparison/                  # comparison table
-│   └── selection/                   # ranking and the selected assembly
-├── 03b_purge_dups/                  # purged assembly, haplotigs, coverage cutoffs
-├── 03_filtering/
-│   ├── blobtools/                   # BlobDir (open with the BlobToolKit Viewer)
-│   ├── filtered/                    # host and symbiont assemblies
-│   └── plots/                       # blob, snail and cumulative plots
+├── final/                           # the automatic product (both strategies)
+│   ├── genome/                      # <species_name>.fa (soft-masked); scaffold_name_map.tsv with RagTag
+│   ├── annotation/                  # GFF3, proteins, CDS, mRNA, annotations.txt (stage 08)
+│   ├── repeats/                     # repeats.gff3, RepeatMasker .tbl/.out, classified library
+│   ├── mitogenome/                  # sequence and annotation
+│   ├── symbiont/                    # symbiont bin of the BlobToolKit split
+│   ├── qc/                          # summary.tsv, methods.md, ranking, gate reports, removed contigs, screen actions
+│   └── multiqc_report.html
+├── release_curation/<release_name>/ # with --run_release (see below)
+├── 00_preprocessing/                # read sets and read QC
+├── 01_kmer_genome_size/             # meryl, GenomeScope 2
+├── 02_assembly/                     # per-assembler output, QC, comparison, selection
+├── 05_mitogenome/                   # MitoHiFi, GetOrganelle/ONT polish, final/, nuclear_filter/
+├── 04_polishing/                    # Medaka; qc/: BUSCO, Merqury QV, polish gate
+├── 03_filtering/                    # BlobDir, host and symbiont assemblies, plots
+├── 03b_purge_dups/                  # purged assembly, haplotigs, cutoffs; qc/ purge gate; length_filter/
 ├── 03c_screens/contigs/             # FCS-adaptor, VecScreen, FCS-GX, review and actions
-├── 03d_scaffolding/                 # RagTag scaffolds and AGP
-├── 04_polishing/
-│   ├── medaka/                      # polished assembly
-│   ├── funannotate/                 # cleaned and sorted assembly
-│   └── qc/                          # BUSCO, Merqury QV, polishing decision
-├── 05_mitogenome/
-│   ├── mitohifi/ getorganelle/ ont_polish/
-│   └── final/                       # mitogenome FASTA and annotation
-├── 06_repeats/
-│   ├── repeatmodeler/ edta/ combined_library/ classify/
-│   ├── repeatmasker/                # soft-masked assembly, .out, .tbl
-│   └── barrnap/                     # rRNA predictions
-├── 07_structural_annotation/
-│   ├── rnaseq/                      # trimmed reads, STAR index and alignments
-│   ├── braker/                      # BRAKER4 output
-│   ├── trnascan/ ncrna/ stringtie/
-│   ├── merged_annotation/           # merged and validated GFF3
-│   ├── refine/                      # refined GFF3, reports, haplotig and gap-fusion scans
-│   └── qc/{compleasm,omark}/
-├── 08_functional_annotation/
-│   ├── interproscan/ eggnog/ phobius/
-│   └── funannotate/                 # annotated GFF3, proteins, GenBank, stats
-├── 10_release/                      # intermediate release files (if --run_release)
-├── release/<release_name>/          # final release folder (if --run_release)
+├── 03d_scaffolding/                 # RagTag scaffolds and AGP; sorted/ final assembly and name map
+├── 06_repeats/  07_structural_annotation/  08_functional_annotation/
+├── 10_release_curation/             # intermediate release files (with --run_release)
 ├── summary/
 │   ├── multiqc/multiqc_report.html  # integrated report
-│   └── ...                          # summary tables and software versions
+│   ├── final/summary.tsv  release_curation/summary.tsv
+│   └── methods.md, software versions, summary tables
 └── pipeline_info/                   # Nextflow timeline, report, trace and DAG
 ```
 
-### Release folder
+### Release curation folder
 
 | Path | Content |
 |------|---------|
-| `README.md`, `summary.tsv` | Release summary, methods with tool versions, known limitations |
-| `genome/` | Soft-masked, screened scaffolds; `scaffold_name_map.tsv` |
+| `genome/` | Soft-masked, screened scaffolds (the same sequence as `final/genome`); `scaffold_name_map.tsv` with RagTag |
 | `annotation/` | GFF3, proteins, CDS and mRNA transcripts, `annotations.txt`, `.gbk` (all consistent with the submission) |
-| `annotation/extra/` | High-confidence GFF3 and proteins, `splits.tsv`, `id_map.tsv`, haplotig and gap candidate lists, `rrna_decisions.tsv` |
+| `annotation/extra/` | High-confidence GFF3 and proteins, `trna_pseudogenes.gff3`, `splits.tsv`, `id_map.tsv`, haplotig and gap candidate lists, `rrna_decisions.tsv` |
 | `repeats/` | Repeat GFF3, RepeatMasker `.tbl` and `.out`, classified library |
-| `ncbi/` | table2asn `.sqn`, `.val`, `.dr`, `.gbf` (the mitogenome is in the same `.sqn`) |
+| `ncbi/` | table2asn `.sqn`, `.val`, `.dr`, `.gbf`, `in.stats` (the mitogenome is in the same `.sqn`) |
 | `mitogenome/` | Mitogenome sequence and annotation |
-| `qc/` | `annotation_qc.tsv`, refinement and protein-identity reports, product curation, screening reports, BUSCO, symbiont BUSCO, Merqury QV |
+| `qc/` | `annotation_qc.tsv`, `summary.tsv`, refinement and protein-identity reports, product curation, screening reports, BUSCO, symbiont BUSCO, Merqury QV |
+| `multiqc_report.html` | The run's MultiQC report: run overview, every stage, release QC, methods |
+
+See [docs/manual_validation.md](docs/manual_validation.md) for the full-data check of the stage order.
 
 ---
 
