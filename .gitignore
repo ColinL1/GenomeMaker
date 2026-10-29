@@ -10,4 +10,5 @@ config
 .braker4
 .conda_envs
 conf/porites.config
+conf/porites_binac2.config
 conf/porites_release_notes.md
