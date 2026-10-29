@@ -1,0 +1,260 @@
+# ============================================================
+# MultiQC configuration -- the integrated run report.
+#
+# Goal: ONE document that can be read top to bottom to assess everything a run
+# did, in the order the pipeline did it. Without an explicit module_order MultiQC
+# groups by tool, which scatters the assembly story across the page.
+#
+# Enable with:  --multiqc_config assets/multiqc_config.yaml
+# ============================================================
+
+title: "Coral Genome Assembly & Annotation"
+subtitle: "Integrated per-stage run report"
+intro_text: >
+  Every stage of the pipeline reports here, in execution order: read QC, k-mer
+  genome sizing, per-assembler comparison and selection, duplicate purging,
+  contamination filtering, polishing (with a before/after regression gate),
+  repeats, structural and functional annotation. Sections absent from a given run
+  correspond to stages that were disabled or skipped.
+
+report_comment: >
+  Two caveats that the numbers alone do not convey. (1) BRAKER is run with
+  --busco_lineage, which uses compleasm to pick the TSEBRA mode that MAXIMISES
+  BUSCO -- so the annotation's BUSCO score is not an independent measure of
+  completeness. Use the OMArk section for that. (2) Large scaffolds are cut into
+  overlapping windows before the BLASTN/DIAMOND searches, which changes E-value
+  scaling and the per-query max_target_seqs cap; BlobTools ranks by bitscore,
+  which is length- and database-size independent, so taxonomic ordering is
+  unaffected.
+
+# ---- Read the pipeline's stages in order, not grouped by tool ----
+# module_order names the native MultiQC modules with their stage; the actual
+# position of EVERY section (native modules and the stageNN_* custom content
+# written by bin/multiqc_custom_content.py) is set by report_section_order below:
+# higher order = earlier in the report, stages 00 -> 09.
+module_order:
+  - fastqc:
+      name: "00 Reads: FastQC (diagnostic only; NanoStat is the long-read QC)"
+      info: >
+        FastQC is a short-read tool; on ONT long reads several of its checks (per-base
+        quality, duplication, adapter content) are not meaningful. Kept only as a
+        diagnostic of what porechop removed. The primary read QC is NanoStat below.
+  - nanostat:
+      name: "00 Reads: NanoStat"
+      info: "ONT read length and quality distributions."
+  - quast:
+      name: "02 Assembly: QUAST"
+      info: "Per-assembler contiguity (multi-assembler mode only)."
+  - busco:
+      name: "02-04 Assembly completeness: BUSCO (all stages)"
+      info: >
+        BUSCO on the assembly at every stage: input, after purge_dups (purged), after
+        the taxonomic filter (filtered), before/after polishing, and the final
+        product. If the polish QC gate falls back to the unpolished assembly, its
+        BUSCO is the 'final_unpolished' sample (see "04 Polishing: QC gate").
+  - samtools:
+      name: "03/05 Coverage: samtools"
+      info: "ONT alignment against the purged assembly (stage 03) and the mitogenome (stage 05)."
+  - star:
+      name: "07 Structural: RNA-seq alignment (STAR)"
+      info: "RNA-seq alignment rate -- the transcript evidence BRAKER's gene models rest on."
+
+# NOTE (2026-10): bin/multiqc_custom_content.py was restructured to group
+# sections by pipeline stage (parent_id) instead of one flat list per tool, so:
+#  - stage03_blobtools_blob_circle + stage03_blobtools_snail no longer exist as
+#    separate ids; they're combined into stage03_blobtools_plots (one section,
+#    both images side by side).
+#  - stage07_braker_transcript_lengths no longer exists; it's now two sections,
+#    stage07_braker_transcript_lengths_cds and _span (native histograms, not a
+#    static image), both under the stage07 group.
+#  - Every stageNN_* id below now also carries parent_id/parent_name/
+#    parent_description set directly in its own file header, so they nest under
+#    one collapsible nav entry per stage. Giving the *parent* id its own order
+#    below positions the whole group; child order only matters within the group.
+#  - custom_data name overrides for the old image ids are gone: every section
+#    (table, native plot, and the blob/snail html block) now sets its own
+#    section_name/description inline, so custom_data has nothing left to do.
+#  - IMPORTANT, found by testing: order sorts sections DESCENDING (higher =
+#    earlier) at the top level, but ASCENDING (lower = earlier) for children
+#    sharing a parent_id. The two blocks below use opposite numbering for
+#    exactly that reason - don't "fix" them to match without re-testing.
+report_section_order:
+  pipeline_summary:                   {order: 2000}
+  fastqc:                             {order: 1000}
+  nanostat:                           {order: 990}
+  quast:                              {order: 900}
+  stage02_gfastats:                   {order: 890}
+  busco:                              {order: 880}
+  stage03_filtering:                  {order: 800}
+  # children of stage03_filtering: ascending = reading order
+  stage03_blobtools_filter:           {order: 1}
+  stage03_blobtools_plots:            {order: 2}
+  stage03_blobtools_cumulative:       {order: 3}
+  samtools:                           {order: 780}
+  polish_qc_gate:                     {order: 700}
+  stage04_polishing:                  {order: 700}
+  stage04_merqury:                    {order: 690}
+  stage05_mitogenome:                 {order: 650}
+  # children of stage05_mitogenome: ascending = reading order
+  stage05_mito_summary:               {order: 1}
+  stage05_mito_gene_check:            {order: 2}
+  stage05_mito_liftoff:               {order: 3}
+  stage05_mito_mitos2:                {order: 4}
+  stage06_repeats:                    {order: 600}
+  # children of stage06_repeats: ascending = reading order
+  stage06_repeatmasker:               {order: 1}
+  stage06_barrnap:                    {order: 2}
+  star:                               {order: 500}
+  stage07_structural:                 {order: 499}
+  # children of stage07_structural: ascending = reading order
+  stage07_braker_geneset:             {order: 1}
+  stage07_star_qc_flag:               {order: 2}
+  stage07_braker_busco:               {order: 3}
+  stage07_braker_completeness:        {order: 4}
+  stage07_braker_transcript_lengths_cds:  {order: 5}
+  stage07_braker_transcript_lengths_span: {order: 6}
+  stage07_trnascan:                   {order: 7}
+  stage07_infernal_types:             {order: 8}
+  stage07_infernal_families:          {order: 9}
+  stage07_stringtie:                  {order: 10}
+  stage07_compleasm:                  {order: 11}
+  stage07_omark:                      {order: 12}
+  stage07_gff3_validation:            {order: 13}
+  stage08_functional:                 {order: 300}
+  # children of stage08_functional: ascending = reading order
+  stage08_funannotate:                {order: 1}
+  stage08_phobius:                    {order: 2}
+  software_versions:                  {order: -1000}
+
+# ---- File search patterns ----
+# The pipeline renames BUSCO summaries to <name>.<lineage>.short_summary.txt, which
+# the default BUSCO pattern (fn: short_summary*) never matched -- BUSCO was silently
+# absent from the report.
+sp:
+  busco:
+    fn: "*short_summary*.txt"
+    contents: "BUSCO version is:"
+
+# ---- Sample name cleanup so the same assembly is not listed under variants ----
+extra_fn_clean_exts:
+  - ".gfastats"
+  - ".short_summary"
+  - "_quast_report"
+  - ".sorted"
+  - "_Log.final.out"
+  - ".fastq.gz"
+  - "_fastqc"
+
+# ---- Readable sample names -------------------------------------------------------
+# One label per entity wherever it appears (module tables and General Statistics).
+# BUSCO rows are stage-labelled; final_unpolished exists only when the polish QC
+# gate fell back, so its label is always correct. When the gate passes, the
+# polished assembly (postpolish) is the final product (see Pipeline summary).
+sample_names_replace_regex: true
+sample_names_replace:
+  "^Por_GA_15_allrun$": "ONT reads raw"
+  "^ONT_reads_pc$": "ONT reads trimmed (porechop)"
+  "^ONT_raw\\.NanoStats$": "ONT reads raw"
+  "^ONT_trimmed\\.NanoStats$": "ONT reads trimmed (porechop)"
+  "^ONT_trimmed\\.NanoStats_post_filtering$": "ONT reads trimmed + NanoPlot filter"
+  "^coverage$": "ONT reads vs purged assembly"
+  "^mito_(flagstat|coverage)$": "ONT reads vs mitogenome"
+  "^input_assembly\\.anthozoa_odb12$": "02 input assembly"
+  "^purged\\.anthozoa_odb12$": "03 purged (purge_dups)"
+  "^filtered\\.anthozoa_odb12$": "03 filtered (taxonomic filter)"
+  "^prepolish\\.anthozoa_odb12$": "04 pre-polish (= filtered; gate input)"
+  "^postpolish\\.anthozoa_odb12$": "04 post-polish (medaka; final only if gate PASS)"
+  "^final_unpolished\\.anthozoa_odb12$": "FINAL ASSEMBLY (unpolished; polish gate fallback)"
+  # RNA-seq libraries: "20230326_Por_GT_28_15_RNA-Seq_QCVTS..." -> "RNA-seq GT_28_15"
+  "^\\d+_Por_([A-Z]+_\\d+_\\d+)_RNA-Seq_.*$": "RNA-seq \\1"
+
+# Both NanoPlot runs write NanoStats.txt (one overwrote the other). The formatting
+# step copies them as ONT_raw.* / ONT_trimmed.*; ignore the colliding originals.
+fn_ignore_paths:
+  - "*qc_nanoplot_raw*"
+  - "*qc_nanoplot_trimmed*"
+
+# ---- General Statistics: only metrics that compare across samples --------------
+# Module-specific columns stay in each module's own table (and in multiqc_data).
+table_columns_visible:
+  busco:
+    lineage_dataset: False
+  "00 Reads: FastQC (diagnostic only; NanoStat is the long-read QC)": False
+  "00 Reads: NanoStat":
+    Read_length_N50_fastq: True
+    Total_bases_fastq: True
+    Median_read_length_fastq: False
+    Mean_read_length_fastq: False
+    Median_read_quality_fastq: False
+  "02-04 Assembly completeness: BUSCO (all stages)":
+    complete: True
+    missing: True
+    complete_single_copy: False
+    complete_duplicated: False
+    fragmented: False
+  "03/05 Coverage: samtools: flagstat":
+    mapped_passed_pct: True
+    flagstat_total: False
+    mapped_passed: False
+  "03/05 Coverage: samtools: coverage":
+    meandepth: True
+    numreads: False
+    covbases: False
+    coverage: False
+    meanbaseq: False
+    meanmapq: False
+  "07 Structural: RNA-seq alignment (STAR)":
+    uniquely_mapped_percent: True
+    mapped: False
+    uniquely_mapped: False
+    multimapped: False
+
+# ---- Conditional formatting for metrics with known thresholds -------------------
+table_cond_formatting_rules:
+  uniquely_mapped_percent:        # STAR: evidence for BRAKER
+    pass: [{gt: 70}]
+    warn: [{lt: 70}]
+    fail: [{lt: 30}]
+  mapped_passed_pct:              # samtools flagstat
+    pass: [{gt: 90}]
+    warn: [{lt: 90}]
+    fail: [{lt: 70}]
+  missing:                        # BUSCO missing %
+    pass: [{lt: 5}]
+    warn: [{gt: 5}]
+    fail: [{gt: 10}]
+  verdict:                        # polish QC gate
+    pass: [{s_eq: "PASS"}]
+    fail: [{s_eq: "FAIL"}, {s_eq: "UNPARSED"}]
+  "Gate status":                  # pipeline summary
+    pass: [{s_eq: "PASS"}]
+    fail: [{s_eq: "FAIL"}, {s_eq: "UNPARSED"}]
+  "Status":                       # stage07_star_qc_flag
+    pass: [{s_eq: "PASS"}]
+    warn: [{s_eq: "WARN"}]
+    fail: [{s_eq: "FAIL"}]
+
+# ---- One-line context under each section: what decision the stage feeds --------
+# Only for native/third-party modules, which have no description field of their
+# own. Every stageNN_* custom-content id already carries its own description
+# (set in bin/multiqc_custom_content.py), so adding a section_comment for those
+# too just repeats the same sentence twice on the page - don't add them back.
+section_comments:
+  fastqc: "Diagnostic only for long reads; does not gate anything."
+  nanostat: "Read length/quality of the ONT data that every assembler and the polishing step consume."
+  quast: "Contiguity per assembler; feeds the assembler ranking (multi-assembler mode)."
+  busco: "Completeness at every stage; the pre/post-polish pair feeds the polish QC gate."
+  samtools: "ONT read support for the purged assembly (stage 03) and the mitogenome (stage 05)."
+  polish_qc_gate: "Decides whether the polished or the unpolished assembly continues to annotation."
+  star: "RNA-seq evidence for BRAKER; low rates mean gene models lean on protein evidence."
+
+# ---- Exports: full underlying data, not just the rendered view -------------------
+max_table_rows: 2000
+plots_force_interactive: true
+export_plots: true
+data_format: "tsv"
+data_dump_file: true
+
+# The pipeline's own collated versions table (COLLATE_VERSIONS) is the software
+# provenance section; MultiQC's built-in one would duplicate it.
+skip_versions_section: true

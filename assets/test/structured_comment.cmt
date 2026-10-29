@@ -1,0 +1,4 @@
+StructuredCommentPrefix	##Genome-Assembly-Data-START##
+Assembly Method	Test v. 1.0
+Sequencing Technology	Oxford Nanopore
+StructuredCommentSuffix	##Genome-Assembly-Data-END##
