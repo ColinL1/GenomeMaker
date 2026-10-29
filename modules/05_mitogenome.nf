@@ -183,6 +183,7 @@ process MITOHIFI {
     path "contigs_stats.tsv",               emit: stats,       optional: true
     path "shared_genes.tsv",                emit: shared,      optional: true
     path "potential_contigs",               emit: contigs_dir, optional: true
+    path "contigs_ids.txt",                 emit: contig_ids,  optional: true   // contigs matching the reference
     path "mitohifi.log",                    emit: log
     path "versions.yml",                    emit: versions
 
@@ -207,6 +208,7 @@ SeqIO.write(r, 'mito_ref.gb', 'genbank')
         grep -q "'parsed_blast.txt' and 'parsed_blast_all.txt' files are empty" mitohifi.log || exit \$status
         echo "MITOHIFI: no mitochondrial contig found in ${assembly}" >&2
     fi
+    if [ -s contigs_filtering/contigs_ids.txt ]; then cp contigs_filtering/contigs_ids.txt contigs_ids.txt; fi
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -218,6 +220,7 @@ SeqIO.write(r, 'mito_ref.gb', 'genbank')
     stub:
     """
     touch final_mitogenome.fasta final_mitogenome.gff mitohifi.log
+    printf 'contig_id\tframeshifts_found\tannotation_file\tlength(bp)\tnumber_of_genes\twas_circular\n' > contigs_stats.tsv
     echo "MITOHIFI stub completed"
 
     cat <<-END_VERSIONS > versions.yml
@@ -723,5 +726,45 @@ process MITO_GENE_CHECK {
     "${task.process}":
         agat: "stub"
     END_VERSIONS
+    """
+}
+
+// ============================================================
+// Remove the contigs MitoHiFi identified as mitochondrial from the NUCLEAR assembly
+// (bin/remove_mito_contigs.py), so the mitogenome is not released twice. Listed contigs
+// longer than params.mito_contig_max_ratio x the reference mitogenome are kept.
+// ============================================================
+process REMOVE_MITO_CONTIGS {
+    label 'res_light'
+    tag   "remove_mito_contigs"
+
+    conda 'conda-forge::python=3.12'
+    container 'quay.io/biocontainers/python:3.12'
+    publishDir "${params.outdir}/05_mitogenome/nuclear_filter", mode: params.publish_mode, pattern: '*.tsv'
+
+    input:
+    path assembly
+    path contig_ids,   stageAs: 'mitohifi/*'   // or NO_ placeholder: nothing found
+    path contig_stats, stageAs: 'mitohifi/*'
+    path mito_ref
+
+    output:
+    path "nuclear_contigs.fasta",    emit: fasta
+    path "mito_contigs_removed.tsv", emit: report
+    path "versions.yml",             emit: versions
+
+    script:
+    """
+    remove_mito_contigs.py ${assembly} ${contig_ids} ${contig_stats} ${mito_ref} ${params.mito_contig_max_ratio} \\
+        nuclear_contigs.fasta mito_contigs_removed.tsv
+
+    printf '"${task.process}":\\n    python: "%s"\\n' "\$(python3 --version | sed 's/Python //')" > versions.yml
+    """
+
+    stub:
+    """
+    cp ${assembly} nuclear_contigs.fasta
+    printf 'contig\\tlength\\tcircular\\tgenes\\taction\\n' > mito_contigs_removed.tsv
+    printf '"${task.process}":\\n    python: stub\\n' > versions.yml
     """
 }

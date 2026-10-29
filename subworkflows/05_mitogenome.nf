@@ -15,7 +15,8 @@ include { FCS_ADAPTOR as MITO_FCS_ADAPTOR ; VECSCREEN as MITO_VECSCREEN ; VECSCR
 // ============================================================
 // Workflow: MITOGENOME_PIPELINE
 // Reads filter → map to reference → coverage stats;
-// pre-purge assembly → MitoHiFi (extract, circularise).
+// selected assembly (contigs mode) → MitoHiFi (find the mito contig, circularise).
+// MitoHiFi's contig list also drives REMOVE_MITO_CONTIGS on the nuclear assembly (main.nf).
 // Final mitogenome: GetOrganelle on Illumina DNA when supplied, otherwise the
 // MitoHiFi contig polished with high-quality mito ONT reads (Medaka). Either
 // way: rotate to the annotation reference, liftover + MITOS2, protein check.
@@ -25,7 +26,7 @@ workflow MITOGENOME_PIPELINE {
     take:
         assembly_reads
         mito_ref
-        assembly        // pre-purge assembly (purge_dups drops the mito contig)
+        assembly        // selected assembly, before any filtering (it still holds the mito contig)
         model_reads     // original ONT reads (headers carry the basecaller model for Medaka)
         illumina_r1     // list of Illumina DNA R1 files, or [] -> ONT route
         illumina_r2     // matching R2 files, same order
@@ -99,6 +100,9 @@ workflow MITOGENOME_PIPELINE {
         mitogenome  = mitogenome_ch
         mito_gff    = mito_gff_ch      // Liftoff annotation (empty without mito_annot_ref_fasta)
         mito_check  = mito_check_ch    // per-gene check against the reference
+        // MitoHiFi's hits in the pre-purge assembly: removed from the nuclear assembly (main.nf)
+        mito_contig_ids   = MITOHIFI.out.contig_ids
+        mito_contig_stats = MITOHIFI.out.stats
         // outputs with no MultiQC module -> custom content
         report_files = report_ch
         versions    = versions_ch

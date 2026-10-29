@@ -1,8 +1,9 @@
 // ============================================================
 // 03b_purge_dups.nf
 // Standard purge_dups pipeline (read-depth + self-alignment based
-// haplotig purging), using ONT coverage. Runs on the SELECTED
-// assembly, before BlobToolKit filtering.
+// haplotig purging), using ONT coverage. Runs on the HOST bin of the
+// BlobToolKit split, so the coverage cutoffs come from host contigs only.
+// Then the purge QC gate and the length filter (>= 200 bp).
 // ============================================================
 
 nextflow.enable.dsl = 2
@@ -119,5 +120,79 @@ process PURGE_DUPS_RUN {
         purge_dups: "stub"
         minimap2: "stub"
     END_VERSIONS
+    """
+}
+
+// purge_dups QC gate (bin/purge_qc_gate.py): BUSCO of the host bin before and after purging.
+// FAIL stops the run (set the cutoffs by hand); WARN (duplication did not drop) is printed by main.nf.
+process PURGE_QC_GATE {
+    label 'res_light'
+    tag   "purge_qc_gate"
+
+    conda 'conda-forge::python=3.12'
+    container 'quay.io/biocontainers/python:3.12'
+    publishDir "${params.outdir}/03b_purge_dups/qc", mode: params.publish_mode
+
+    input:
+    path before_summary, stageAs: 'before/*'
+    path after_summary,  stageAs: 'after/*'
+    path cutoffs
+
+    output:
+    path "purge_qc_report.tsv",   emit: report
+    path "purge_qc_gate_mqc.tsv", emit: mqc
+    path "purge_gate_status.txt", emit: status
+    path "versions.yml",          emit: versions
+
+    script:
+    def source = params.purge_dups_transition != null ? 'params (purge_dups_lower/transition/upper)' : 'calcuts (automatic)'
+    """
+    purge_qc_gate.py --before ${before_summary} --after ${after_summary} --cutoffs ${cutoffs} \\
+      --cutoffs-source '${source}' --busco-tolerance ${params.purge_busco_tolerance}
+
+    printf '"${task.process}":\\n    python: "%s"\\n' "\$(python3 --version | sed 's/Python //')" > versions.yml
+    """
+
+    stub:
+    """
+    printf 'metric\\tbefore_purge\\tafter_purge\\tdelta\\tverdict\\n' > purge_qc_report.tsv
+    cp purge_qc_report.tsv purge_qc_gate_mqc.tsv
+    echo PASS > purge_gate_status.txt
+    printf '"${task.process}":\\n    python: stub\\n' > versions.yml
+    """
+}
+
+// Sequences shorter than params.min_contig_length (default 200 bp, the NCBI minimum) are removed;
+// get_seqs -e leaves a few such fragments when it cuts contigs.
+process LENGTH_FILTER {
+    label 'res_light'
+    tag   "length_filter"
+
+    conda 'conda-forge::python=3.12'
+    container 'quay.io/biocontainers/python:3.12'
+    publishDir "${params.outdir}/03b_purge_dups/length_filter", mode: params.publish_mode
+
+    input:
+    path assembly
+    val  gate_status   // purge gate result (or 'skipped'): the filter runs only after the gate passed
+
+    output:
+    path "contigs.fasta",       emit: fasta
+    path "length_removed.tsv",  emit: removed
+    path "versions.yml",        emit: versions
+
+    script:
+    """
+    length_filter.py ${assembly} contigs.fasta length_removed.tsv ${params.min_contig_length}
+    test -s contigs.fasta
+
+    printf '"${task.process}":\\n    python: "%s"\\n' "\$(python3 --version | sed 's/Python //')" > versions.yml
+    """
+
+    stub:
+    """
+    cp ${assembly} contigs.fasta
+    printf 'name\\tlength\\n' > length_removed.tsv
+    printf '"${task.process}":\\n    python: stub\\n' > versions.yml
     """
 }
