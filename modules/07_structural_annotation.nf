@@ -329,9 +329,27 @@ process BRAKER4_RUN {
 
     script:
     def sample = params.species_name
+    def on_slurm = params.braker4_executor == 'slurm'
+    // slurm: per-rule node size for BRAKER4 ([SLURM_ARGS]) and the executor flags
+    def slurm_ini = on_slurm
+        ? "printf '[SLURM_ARGS]\\ncpus_per_task = ${params.braker4_slurm_cpus}\\nmem_of_node = ${params.braker4_slurm_mem_mb}\\nmax_runtime = ${params.braker4_slurm_runtime}\\n' >> config.ini"
+        : ''
+    // slurm flags as in the tested BinAC2 BRAKER4 run (TSEBRA needs less than a full node)
+    def executor_args = on_slurm
+        ? "--executor slurm --jobs ${params.braker4_slurm_jobs} --max-status-checks-per-second 0.5 " +
+          "--default-resources slurm_partition=${params.braker4_slurm_partition} mem_mb=${params.braker4_slurm_mem_mb}" +
+          (params.project ? " slurm_account=${params.project}" : '') + " tmpdir=\"'\$PWD/tmp'\" " +
+          "--set-resources run_tsebra:mem_mb=48000 run_tsebra_etp_per_run:mem_mb=48000 " +
+          "--restart-times 3 --rerun-incomplete --keep-going --cores ${task.cpus}"
+        : "--cores ${task.cpus}"
     """
     set -euo pipefail
     export PATH="${params.braker4_snakemake_env}/bin:\$PATH"
+    if [ "${params.braker4_executor}" = slurm ]; then
+        python3 -c 'import snakemake_executor_plugin_slurm' 2>/dev/null || {
+            echo "ERROR: braker4_executor=slurm needs snakemake-executor-plugin-slurm in ${params.braker4_snakemake_env}" >&2; exit 1; }
+        mkdir -p tmp   # rules spill sort files to \$TMPDIR; the task dir is shared and bound
+    fi
     BRAKER4_DIR="${params.braker4_dir}"
 
     GENOME=\$(readlink -f ${assembly})
@@ -365,13 +383,14 @@ process BRAKER4_RUN {
     run_ncrna = 0
     no_cleanup = 0
     EOF
+    ${slurm_ini}
 
     # Bind every directory the containers must see: the task dir, the real
     # locations of the staged inputs, and the BRAKER4 checkout (download cache).
     BINDS=\$(printf '%s\\n' "\$PWD" "\$(dirname \$GENOME)" "\$(dirname \$BAM)" "\$(dirname \$PROT)" "\$BRAKER4_DIR" | sort -u | sed 's/^/-B /' | tr '\\n' ' ')
 
     snakemake -s "\$BRAKER4_DIR/Snakefile" \\
-      --cores ${task.cpus} \\
+      ${executor_args} \\
       --use-apptainer \\
       --apptainer-prefix "\${NXF_APPTAINER_CACHEDIR:-\$PWD/apptainer_cache}" \\
       --apptainer-args "\$BINDS" \\

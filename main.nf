@@ -128,6 +128,18 @@ workflow CORAL_GENOME_PIPELINE {
             error "run_structural_annotation=true requires run_repeats=true: BRAKER runs with --softmasking " +
                   "and needs the repeat-softmasked assembly stage 06 produces"
         }
+        // BRAKER4 lives outside the repository (README.md "BRAKER4 setup"); stub runs do not call it
+        if (!workflow.stubRun) {
+            def braker_missing = []
+            if (!file("${params.braker4_dir}/Snakefile").exists())             braker_missing << "--braker4_dir ${params.braker4_dir} (no Snakefile)"
+            if (!file("${params.braker4_snakemake_env}/bin/snakemake").exists()) braker_missing << "--braker4_snakemake_env ${params.braker4_snakemake_env} (no bin/snakemake)"
+            if (braker_missing) {
+                error "BRAKER4 is not set up: ${braker_missing.join('; ')}. See README.md, section 'BRAKER4 setup'"
+            }
+        }
+        if (!(params.braker4_executor in ['local', 'slurm'])) {
+            error "braker4_executor must be 'local' or 'slurm', not '${params.braker4_executor}'"
+        }
         if (params.run_haplotig_scan.toString().toBoolean() && !params.n_chromosome_scaffolds) {
             error "run_haplotig_scan=true needs --n_chromosome_scaffolds (the chromosome-scale scaffolds the copies are searched on)"
         }

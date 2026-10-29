@@ -14,6 +14,7 @@
   - [Pipeline Overview](#pipeline-overview)
   - [Installation Requirements](#installation-requirements)
     - [Tools set up outside the containers](#tools-set-up-outside-the-containers)
+    - [BRAKER4 setup](#braker4-setup)
   - [Reference Data and Databases](#reference-data-and-databases)
   - [Quick Start](#quick-start)
     - [1. Clone the repository](#1-clone-the-repository)
@@ -106,12 +107,31 @@ nextflow -v
 
 | Tool | Parameter | Notes |
 |------|-----------|-------|
-| BRAKER4 | `--braker4_dir`, `--braker4_snakemake_env` | A checkout of [Gaius-Augustus/BRAKER4](https://github.com/Gaius-Augustus/BRAKER4) and a conda env with Snakemake 8 and pandas |
+| BRAKER4 | `--braker4_dir`, `--braker4_snakemake_env` | Not in the repository: set it up once, see [BRAKER4 setup](#braker4-setup) |
+| BRAKER4 on SLURM | `--braker4_executor slurm` | Each BRAKER4 rule becomes its own SLURM job (`--braker4_slurm_partition`, account `--project`, `--braker4_slurm_jobs`, per-rule limits `--braker4_slurm_cpus`, `--braker4_slurm_mem_mb`, `--braker4_slurm_runtime`); `--braker4_snakemake_env` needs `snakemake-executor-plugin-slurm`. Default `local`: all rules in one job |
 | NECAT | `--necat_path_bin` | Only when `necat` is in `--assemblers` |
 | Phobius | `--phobius_dir` | Licence-restricted; install from the licensed tarball, or `--run_phobius false` |
 | InterProScan data | `--interproscan_data` | Must match the release of `--interproscan_container` (default `interpro/interproscan:5.73-104.0`) |
 | FCS-adaptor / FCS-GX | `--fcs_adaptor_image`, `--fcs_gx_image` | NCBI `.sif` images, run with `apptainer exec` |
 | table2asn | `--table2asn` | NCBI Linux binary, for the release stage only |
+
+### BRAKER4 setup
+
+Structural annotation runs [BRAKER4](https://github.com/Gaius-Augustus/BRAKER4) (a Snakemake
+workflow) from a checkout and a Snakemake env. Both are gitignored, so a fresh clone does not have
+them. The defaults expect them inside the pipeline folder; from the pipeline folder:
+
+```bash
+git clone https://github.com/Gaius-Augustus/BRAKER4.git .braker4/BRAKER4
+git -C .braker4/BRAKER4 checkout f087ed0          # the tested commit (v0.5.0-beta-19)
+mamba env create -p .conda_envs/braker4_snakemake -f assets/braker4_snakemake_env.yml
+```
+
+Elsewhere: set `--braker4_dir` (the folder with `Snakefile`) and `--braker4_snakemake_env` (the env
+folder with `bin/snakemake`). With `--braker4_executor slurm` the env also needs
+`snakemake-executor-plugin-slurm` (see `assets/braker4_snakemake_env.yml`). The run stops at start-up
+when structural annotation is on and either is missing. BRAKER4 pulls its own containers on the
+first run.
 
 ---
 
