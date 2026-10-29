@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Step 10 (WP5, D5): release GFF with tags, high-confidence subset, candidate lists.
+"""Release GFF with tags, high-confidence subset, candidate lists.
 
 funannotate does not carry custom GFF attributes, so the refined models are mapped onto the final
 (funannotate) models by structure: (scaffold, strand, CDS segments, exon segments), falling back to
 (scaffold, strand, CDS segments). Then:
   - the release GFF3 = final GFF3 with each mRNA's span set to its exon extent (funannotate writes
     the gene span on every isoform) + gene attributes evidence=, possible_haplotig_of=<final gene>,
-    possible_haplotig=stageA and mRNA attribute note=possible_gap_fusion|possible_gap_misorder;
+    possible_haplotig=purge_dups_flagged and mRNA attribute note=possible_gap_fusion|possible_gap_misorder;
   - the high-confidence set: protein-coding genes with evidence != none, or with an InterPro, eggNOG
     or Pfam hit in annotations.txt; all tRNA/ncRNA/rRNA genes are kept;
   - lists: possible_haplotigs.tsv, gap_fusion_candidates.tsv, gap_misorder_candidates.tsv,
@@ -192,7 +192,7 @@ def main():
                [(g, at.get('possible_haplotig_of', ''), at.get('possible_haplotig', ''), at.get('evidence', ''))
                 for g, at in sorted(final_gene_attr.items())
                 if 'possible_haplotig_of' in at or 'possible_haplotig' in at],
-               'gene\tnear_identical_placed_copy\tstageA_flagged\tevidence')
+               'gene\tnear_identical_placed_copy\tpurge_dups_flagged\tevidence')
     for tag, fn in (('possible_gap_fusion', 'gap_fusion_candidates.tsv'),
                     ('possible_gap_misorder', 'gap_misorder_candidates.tsv')):
         write_list(fn, [(fin[t]['gene'], t) for t, nt in sorted(final_tx_note.items()) if tag in nt],

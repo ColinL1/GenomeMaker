@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 11: release QC gate, checks G1-G11 (master plan section 9.3; Plan 1 adds G11).
+"""Release QC gate: checks on the release files before the release folder is built.
 
 Every check writes one or more rows to annotation_qc.tsv: check, level (FAIL/WARN), status
 (PASS/FAIL/WARN/NA), value, detail. Exit status 1 if any FAIL-level check fails.
@@ -71,7 +71,7 @@ CANONICAL_INTRONS = {('GT', 'AG'), ('GC', 'AG'), ('AT', 'AC')}
 
 
 def model_checks(gff, seqs):
-    """G1 checks of the protein-coding models against the released sequence. Returns a dict of
+    """Model checks of the protein-coding models against the released sequence. Returns a dict of
     check -> (number of bad items, examples)."""
     tx, cds, utr, exons = {}, collections.defaultdict(list), collections.defaultdict(list), collections.defaultdict(list)
     for f, at in gff_iter(gff):
@@ -149,18 +149,18 @@ def main():
     ap.add_argument('--screen-actions', help='screen_actions.tsv of the screen that ran before scaffolding')
     ap.add_argument('--screen-review', help='screen_review.tsv of that screen (decisions on the unclear hits)')
     ap.add_argument('--screens-not-run', action='store_true',
-                    help='the contamination screens were switched off: G9 is reported as WARN, not run')
+                    help='the contamination screens were switched off: the screen checks are reported as WARN, not run')
     ap.add_argument('--n-placed', type=int, default=0,
                     help='chromosome-scale scaffolds (scaffold_1..N); 0 = do not check their names')
     ap.add_argument('--chrom-prefix', default='',
                     help='name prefix the chromosome scaffolds map to in the name map (e.g. NC_); empty = no check')
     ap.add_argument('--expected-lineage', default='Eukaryota',
-                    help='G11: every lineage in the .sqn must start with this')
+                    help='every lineage in the .sqn must start with this')
     ap.add_argument('--expected-division', default='',
-                    help='G11: taxonomic division every organism must carry (e.g. INV); empty = no check')
+                    help='taxonomic division every organism must carry (e.g. INV); empty = no check')
     a = ap.parse_args()
 
-    # ---------------- G1 / G2 on the release GFF
+    # ---------------- model structure on the release GFF
     pc_genes = set()
     if have(a.release_gff):
         mrna, exons, cds = {}, collections.defaultdict(list), collections.defaultdict(list)
@@ -189,7 +189,7 @@ def main():
                 trna_iso[m.group(1) if m else '?'] += 1
             elif f[2] in ('ncRNA', 'rRNA'):
                 ncrna.append((f[0], f[3], f[4], f[6], at))
-        row('G1_no_AGAT_features', 'FAIL', agat == 0, agat)
+        row('model_no_AGAT_features', 'FAIL', agat == 0, agat)
         # partial ends from the refined GFF (start/stop codon features), mapped by transcript
         idmap = {}
         if have(a.id_map):
@@ -215,58 +215,58 @@ def main():
         bad5 = sum(1 for t, u in utr.items() if u['5'] and t in has_start and not has_start[t])
         bad3 = sum(1 for t, u in utr.items() if u['3'] and t in has_stop and not has_stop[t])
         unmapped_utr = sum(1 for t, u in utr.items() if (u['5'] or u['3']) and t not in has_start)
-        row('G1_no_UTR_on_partial_end', 'FAIL', (bad5 + bad3 == 0) and unmapped_utr == 0 and bool(has_start),
+        row('model_no_UTR_on_partial_end', 'FAIL', (bad5 + bad3 == 0) and unmapped_utr == 0 and bool(has_start),
             bad5 + bad3, f'5p on no-start {bad5}; 3p on no-stop {bad3}; UTR transcripts not mapped {unmapped_utr}')
         l5 = sorted(x for u in utr.values() for x in u['5'])
         l3 = sorted(x for u in utr.values() for x in u['3'])
         short = sum(1 for x in l5 + l3 if x <= 3)
-        row('G1_UTR_lengths', 'FAIL', short == 0,
+        row('model_UTR_lengths', 'FAIL', short == 0,
             f"5p tx {sum(1 for u in utr.values() if u['5'])}; 3p tx {sum(1 for u in utr.values() if u['3'])}",
             f'pieces <=3 bp {short}; median 5p {l5[len(l5) // 2] if l5 else 0}; median 3p {l3[len(l3) // 2] if l3 else 0}')
         span_bad = sum(1 for t, (c, s, a0, b0, g) in mrna.items()
                        if exons[t] and (min(x for x, _ in exons[t]), max(y for _, y in exons[t])) != (a0, b0))
         cds_out = sum(1 for t in mrna for x, y in cds[t] if not any(e0 <= x and y <= e1 for e0, e1 in exons[t]))
-        row('G2_transcript_span_equals_exons', 'FAIL', span_bad == 0 and cds_out == 0, span_bad, f'CDS outside exon {cds_out}')
+        row('model_transcript_span_equals_exons', 'FAIL', span_bad == 0 and cds_out == 0, span_bad, f'CDS outside exon {cds_out}')
         n_t = sum(trna_iso.values())
         top = trna_iso.most_common(1)[0] if trna_iso else ('-', 0)
-        row('G4_tRNA_isotype_share', 'WARN', not n_t or top[1] / n_t <= 0.15, f'{n_t} tRNAs',
+        row('ncrna_tRNA_isotype_share', 'WARN', not n_t or top[1] / n_t <= 0.15, f'{n_t} tRNAs',
             f'max {top[0]} {top[1]} ({100 * top[1] / max(1, n_t):.1f}%)')
         und = sum(v for k, v in trna_iso.items() if k in ('Undet', 'Sup', 'Xxx', '?'))
-        row('G4_no_Undet_Sup_tRNA', 'FAIL', und == 0, und)
-        row('G4_no_pseudogenes_in_main_GFF', 'FAIL', types['pseudogene'] == 0 and types['RNA'] == 0,
+        row('ncrna_no_Undet_Sup_tRNA', 'FAIL', und == 0, und)
+        row('ncrna_no_pseudogenes_in_main_GFF', 'FAIL', types['pseudogene'] == 0 and types['RNA'] == 0,
             types['pseudogene'] + types['RNA'])
         mir = sum(1 for x in ncrna if 'miRNA' in x[4].get('ncRNA_class', '') or 'mir-' in x[4].get('product', '').lower()
                   or 'microRNA' in x[4].get('product', ''))
-        row('G4_no_miRNA', 'WARN', mir == 0, mir,
+        row('ncrna_no_miRNA', 'WARN', mir == 0, mir,
             'miRNA calls from Rfam covariance models without small-RNA support; review before submission')
         bycoord = collections.defaultdict(set)
         for c, s, e, strand, _ in ncrna:
             bycoord[(c, s, e)].add(strand)
         dup = sum(1 for v in bycoord.values() if len(v) > 1)
-        row('G4_no_opposite_strand_ncRNA', 'FAIL', dup == 0, dup)
+        row('ncrna_no_opposite_strand_ncRNA', 'FAIL', dup == 0, dup)
         noneuk = sum(1 for x in ncrna if re.search(r'archaea|bacteria|microsporidia', json.dumps(x[4]), re.I))
-        row('G4_no_noneukaryotic_rRNA', 'FAIL', noneuk == 0, noneuk)
+        row('ncrna_no_noneukaryotic_rRNA', 'FAIL', noneuk == 0, noneuk)
         row('genes_protein_coding_release_gff', 'INFO', None if not pc_genes else True, len(pc_genes))
     else:
-        row('G1_G2_G4_release_gff', 'FAIL', None, 'missing')
+        row('model_release_gff', 'FAIL', None, 'missing')
 
-    # ---------------- G1 model checks against the released sequence
+    # ---------------- model checks against the released sequence
     if have([a.release_gff, a.fasta]):
         bad = model_checks(a.release_gff, fasta(a.fasta))
-        for k, name in (('cds_in_gap', 'G1_no_CDS_in_gap'), ('partial_end', 'G1_partial_ends_valid'),
-                        ('utr_over_other_cds', 'G1_no_UTR_over_other_gene_CDS'),
-                        ('utr_junction', 'G1_UTR_junctions_canonical')):
+        for k, name in (('cds_in_gap', 'model_no_CDS_in_gap'), ('partial_end', 'model_partial_ends_valid'),
+                        ('utr_over_other_cds', 'model_no_UTR_over_other_gene_CDS'),
+                        ('utr_junction', 'model_UTR_junctions_canonical')):
             row(name, 'FAIL', not bad[k], len(bad[k]), '; '.join(bad[k][:5]))
     else:
-        row('G1_model_checks', 'FAIL', None, 'missing')
+        row('model_checks', 'FAIL', None, 'missing')
 
-    # ---------------- G2 protein identity, G3 refine assertions
+    # ---------------- protein identity, refine assertions
     if have(a.protein_identity):
         d = dict(l.rstrip('\n').split('\t')[:2] for l in open(a.protein_identity) if not l.startswith('PROBLEM'))
-        row('G2_proteins_identical_except_splits', 'FAIL', d.get('problems') == '0',
+        row('protein_identical_except_splits', 'FAIL', d.get('problems') == '0',
             f"identical {d.get('identical_unsplit')}; new {d.get('split_new_proteins')}", f"problems {d.get('problems')}")
     else:
-        row('G2_proteins_identical_except_splits', 'FAIL', None, 'missing')
+        row('protein_identical_except_splits', 'FAIL', None, 'missing')
     if have([a.final_proteins, a.refined_proteins, a.id_map]):
         fp, rp = fasta(a.final_proteins), fasta(a.refined_proteins)
         mism = miss = xonly = 0
@@ -284,20 +284,20 @@ def main():
                     mism += 1
                 elif a_ != b_:
                     xonly += 1
-        row('G2_funannotate_proteins_equal_refined', 'FAIL', mism == 0 and miss == 0, mism,
+        row('protein_funannotate_equal_refined', 'FAIL', mism == 0 and miss == 0, mism,
             f'unmapped {miss}; differing only at X (gap codons) {xonly}')
     if have(a.refine_report):
         fails = [l for l in open(a.refine_report) if l.startswith('FAIL')]
         cnt = {l.split('\t')[1]: l.rstrip('\n').split('\t')[2] for l in open(a.refine_report) if l.startswith('COUNT')}
-        row('G3_refine_assertions', 'FAIL', not fails, len(fails))
-        row('G3_gene_counts', 'INFO', True, f"BRAKER {cnt.get('braker_genes')} -> AGAT {cnt.get('agat_genes')} -> "
-            f"WP2 {cnt.get('genes_after_wp2')} -> WP6 {cnt.get('genes_protein_coding')}",
+        row('refine_assertions', 'FAIL', not fails, len(fails))
+        row('refine_gene_counts', 'INFO', True, f"BRAKER {cnt.get('braker_genes')} -> AGAT {cnt.get('agat_genes')} -> "
+            f"gene membership {cnt.get('genes_after_membership')} -> gap splits {cnt.get('genes_protein_coding')}",
             f"merges kept {cnt.get('merge_pairs_kept')}, undone {cnt.get('merge_undone')}, added {cnt.get('merge_added')}")
     if a.gt_report:
         bad = [p for p in a.gt_report if not have(p) or re.search(r'warning|error', open(p).read(), re.I)]
         row('GFF3_gt_validator', 'FAIL', not bad, f'{len(a.gt_report) - len(bad)}/{len(a.gt_report)} clean')
 
-    # ---------------- G6 one protein-coding number
+    # ---------------- one protein-coding number
     nums = {}
     if have(a.stats_json):
         js = json.load(open(a.stats_json))
@@ -311,10 +311,10 @@ def main():
             m = re.search(r'[Pp]rotein-coding genes\D{0,40}?([\d,]+)', open(p).read())
             nums[key] = int(m.group(1).replace(',', '')) if m else None
     vals = set(nums.values())
-    row('G6_one_protein_coding_number', 'FAIL', len(nums) == 5 and len(vals) == 1 and None not in vals,
+    row('count_one_protein_coding_number', 'FAIL', len(nums) == 5 and len(vals) == 1 and None not in vals,
         ';'.join(f'{k}={v}' for k, v in nums.items()))
 
-    # ---------------- G7 names and AGP
+    # ---------------- scaffold names and AGP
     if have(a.name_map):
         st = collections.Counter()
         chrom_ok = 0
@@ -327,10 +327,10 @@ def main():
             if m and int(m.group(1)) <= a.n_placed and x[1].startswith(a.chrom_prefix) and x[3] != 'not_found':
                 chrom_ok += 1
         chrom_check = not (a.n_placed and a.chrom_prefix) or chrom_ok == a.n_placed
-        row('G7_scaffold_name_map', 'FAIL', st['not_found'] == 0 and chrom_check,
+        row('names_scaffold_name_map', 'FAIL', st['not_found'] == 0 and chrom_check,
             dict(st), f'chromosome scaffolds mapped to {a.chrom_prefix or "-"}: {chrom_ok}/{a.n_placed}')
     else:
-        row('G7_scaffold_name_map', 'FAIL', None, 'missing')
+        row('names_scaffold_name_map', 'FAIL', None, 'missing')
     if have([a.agp, a.fasta]):
         lens = {k: len(v) for k, v in fasta(a.fasta).items()}
         end = collections.Counter()
@@ -345,17 +345,17 @@ def main():
                 if not (x[4] == 'U' and x[5] == '100' and x[7] == 'yes' and x[8] == 'align_genus'):
                     gaps_bad += 1
         cover = sum(1 for k, L in lens.items() if end[k] != L)
-        row('G7_AGP_gaps_U100_align_genus', 'FAIL', gaps_bad == 0 and cover == 0, f'{gaps} gaps',
+        row('names_AGP_gaps_U100_align_genus', 'FAIL', gaps_bad == 0 and cover == 0, f'{gaps} gaps',
             f'bad gap lines {gaps_bad}; scaffolds not covered exactly {cover}')
 
-    # ---------------- G8 repeat library
+    # ---------------- repeat library
     if have(a.repeat_lib):
         labs = collections.Counter(l.rstrip('\n').split('#', 1)[1].split()[0] for l in open(a.repeat_lib)
                                    if l.startswith('>') and '#' in l)
         low = sum(v for k, v in labs.items() if re.search(r'(^|/)unknown$', k))
         nonstd = sum(v for k, v in labs.items() if k.startswith(('DNAnona', 'DNAauto')))
         unk = sum(v for k, v in labs.items() if k.split('/')[0] == 'Unknown')
-        row('G8_repeat_labels', 'WARN', low == 0 and nonstd == 0, f'lowercase unknown {low}; non-standard {nonstd}',
+        row('repeat_labels', 'WARN', low == 0 and nonstd == 0, f'lowercase unknown {low}; non-standard {nonstd}',
             f'Unknown families {unk}/{sum(labs.values())}')
     if have(a.relabel_report):
         d = {l.split('\t')[0]: l.rstrip('\n').split('\t')[1:] for l in open(a.relabel_report)}
@@ -363,32 +363,32 @@ def main():
             f"before {d.get('unknown_share_of_repeat_bp_before', ['?'])[0]}; after {d.get('unknown_share_of_repeat_bp_after', ['?'])[0]}",
             'share of RepeatMasker-annotated bp labelled Unknown')
 
-    # ---------------- G9 screens on the released FASTA
+    # ---------------- screens on the released FASTA
     def table_rows(p):
         return [l for l in open(p) if l.strip() and not l.startswith('#')]
     screened_once = bool(a.screen_actions or a.screen_review)   # pipeline: one screen, before scaffolding
     if a.screens_not_run:
-        for c in ('G9_FCS_adaptor_clean', 'G9_FCS_GX_no_actions', 'G9_VecScreen_no_strong_moderate'):
+        for c in ('screen_FCS_adaptor_clean', 'screen_FCS_GX_no_actions', 'screen_VecScreen_no_strong_moderate'):
             ROWS.append((c, 'WARN', 'WARN', 'not run', 'contamination screens switched off (run_screens=false)'))
     elif screened_once:
         if have(a.screen_actions):
             st = collections.Counter(l.split('\t')[0] for l in open(a.screen_actions) if not l.startswith('status'))
-            row('G9_screen_actions_applied', 'FAIL', True, f"applied {st['applied']}; listed, not applied {st['not_applied']}",
+            row('screen_actions_applied', 'FAIL', True, f"applied {st['applied']}; listed, not applied {st['not_applied']}",
                 'FCS-adaptor, VecScreen, FCS-GX on the contigs before scaffolding; the sequence is not changed afterwards')
         else:
-            row('G9_screen_actions_applied', 'FAIL', None, 'missing')
+            row('screen_actions_applied', 'FAIL', None, 'missing')
         if have(a.screen_review):
             rv = [l.rstrip('\n').split('\t') for l in open(a.screen_review) if not l.startswith('seq\t')]
             und = sum(1 for x in rv if len(x) > 6 and x[6] == 'UNDECIDED')
-            row('G9_screen_hits_decided', 'FAIL', und == 0, f'{len(rv)} hits; undecided {und}',
+            row('screen_hits_decided', 'FAIL', und == 0, f'{len(rv)} hits; undecided {und}',
                 '; '.join(f'{k} {v}' for k, v in collections.Counter(x[6] for x in rv if len(x) > 6).items()))
         else:
-            row('G9_screen_hits_decided', 'FAIL', None, 'missing')
+            row('screen_hits_decided', 'FAIL', None, 'missing')
     elif have(a.fcs_adaptor):
         r = table_rows(a.fcs_adaptor)
-        row('G9_FCS_adaptor_clean', 'FAIL', not r, len(r))
+        row('screen_FCS_adaptor_clean', 'FAIL', not r, len(r))
     else:
-        row('G9_FCS_adaptor_clean', 'FAIL', None, 'missing')
+        row('screen_FCS_adaptor_clean', 'FAIL', None, 'missing')
     if a.screens_not_run or screened_once:
         pass
     elif have(a.fcs_gx):
@@ -397,10 +397,10 @@ def main():
             acc = {tuple(l.split('\t')[:3]) for l in open(a.fcs_gx_accepted) if not l.startswith('seq')}
         rows_gx = [l.split('\t') for l in table_rows(a.fcs_gx)]
         r = [x for x in rows_gx if x[4] != 'INFO' and tuple(x[:3]) not in acc]
-        row('G9_FCS_GX_no_actions', 'FAIL', not r, len(r),
-            f'accepted by owner {sum(1 for x in rows_gx if tuple(x[:3]) in acc)}')
+        row('screen_FCS_GX_no_actions', 'FAIL', not r, len(r),
+            f'accepted manually {sum(1 for x in rows_gx if tuple(x[:3]) in acc)}')
     else:
-        row('G9_FCS_GX_no_actions', 'FAIL', None, 'missing')
+        row('screen_FCS_GX_no_actions', 'FAIL', None, 'missing')
     if a.screens_not_run or screened_once:
         pass
     elif have(a.vecscreen):
@@ -409,14 +409,14 @@ def main():
             acc = {tuple(l.split('\t')[:3]) for l in open(a.vecscreen_accepted) if not l.startswith('seq')}
         sm = [l.split('\t') for l in open(a.vecscreen) if not l.startswith('seq')]
         bad = [x for x in sm if x[3] in ('Strong', 'Moderate') and tuple(x[:3]) not in acc]
-        row('G9_VecScreen_no_strong_moderate', 'FAIL', not bad, len(bad),
-            f'accepted by owner {sum(1 for x in sm if tuple(x[:3]) in acc)}; weak {sum(1 for x in sm if x[3] == "Weak")}')
+        row('screen_VecScreen_no_strong_moderate', 'FAIL', not bad, len(bad),
+            f'accepted manually {sum(1 for x in sm if tuple(x[:3]) in acc)}; weak {sum(1 for x in sm if x[3] == "Weak")}')
     else:
-        row('G9_VecScreen_no_strong_moderate', 'FAIL', None, 'missing')
+        row('screen_VecScreen_no_strong_moderate', 'FAIL', None, 'missing')
 
-    # ---------------- G5, G10, G11 NCBI
+    # ---------------- NCBI metadata, validation and lineage
     g5 = bool(a.locus_tag and have(a.sbt) and (a.isolate or a.strain))
-    row('G5_ncbi_metadata', 'FAIL', g5 or None,
+    row('ncbi_metadata', 'FAIL', g5 or None,
         f'locus_tag={a.locus_tag}; sbt={bool(have(a.sbt))}; isolate={a.isolate}; strain={a.strain}')
     if a.val_dir and os.path.isdir(a.val_dir):
         sqn = glob.glob(f'{a.val_dir}/*.sqn')
@@ -439,7 +439,7 @@ def main():
                 div_bad += sum(1 for d in divs if d != a.expected_division) + (0 if divs else 1)
             if not re.search(r'lineage\s+"', txt):
                 lin_bad += 1
-        row('G11_organism_lineage', 'FAIL', bool(sqn) and lin_bad == 0 and div_bad == 0,
+        row('ncbi_organism_lineage', 'FAIL', bool(sqn) and lin_bad == 0 and div_bad == 0,
             f'{len(sqn)} sqn; lineage bad {lin_bad}; div bad {div_bad}', '; '.join(sorted(lins))[:300])
         val_err = collections.Counter()
         for p in glob.glob(f'{a.val_dir}/*.val'):
@@ -447,12 +447,12 @@ def main():
                 m = re.match(r'(?i)(error|reject|critical|fatal)\S*: valid \[([A-Za-z0-9_.]+)\]', l)
                 if m:
                     val_err[m.group(2)] += 1
-        row('G10_val_no_ERROR_REJECT', 'FAIL', bool(glob.glob(f'{a.val_dir}/*.val')) and not val_err,
+        row('ncbi_val_no_ERROR_REJECT', 'FAIL', bool(glob.glob(f'{a.val_dir}/*.val')) and not val_err,
             sum(val_err.values()), '; '.join(f'{k} {v}' for k, v in val_err.most_common(8)))
         fatal = set()
         for p in glob.glob(f'{a.val_dir}/*.dr'):
             fatal |= {l.strip() for l in open(p, errors='replace') if l.startswith('FATAL')}
-        row('G10_dr_no_FATAL', 'FAIL', bool(glob.glob(f'{a.val_dir}/*.dr')) and not fatal, len(fatal), ' | '.join(sorted(fatal)[:5]))
+        row('ncbi_dr_no_FATAL', 'FAIL', bool(glob.glob(f'{a.val_dir}/*.dr')) and not fatal, len(fatal), ' | '.join(sorted(fatal)[:5]))
         # warnings and non-fatal discrepancies do not block an NCBI submission: counted for the report only
         val_warn, dr_cat = collections.Counter(), collections.Counter()
         for p in glob.glob(f'{a.val_dir}/*.val'):
@@ -470,14 +470,14 @@ def main():
                     dr_cat[f'dr:{m.group(1)}: {m.group(3)}'] += int(m.group(2) or 1)
         # EC numbers table2asn had to split or delete as obsolete (.ecn): the .sqn would differ from the GFF3
         ecn = [l.rstrip('\n') for p in glob.glob(f'{a.val_dir}/*.ecn') for l in open(p, errors='replace') if l.strip()]
-        row('G10_ecn_no_EC_changes', 'FAIL', not ecn, len(ecn), '; '.join(ecn[:5]))
+        row('ncbi_ecn_no_EC_changes', 'FAIL', not ecn, len(ecn), '; '.join(ecn[:5]))
         # product names table2asn had to rewrite (.fixedproducts): the .sqn would differ from the GFF3
         fxp = [l.rstrip('\n') for p in glob.glob(f'{a.val_dir}/*.fixedproducts') for l in open(p, errors='replace') if l.strip()]
-        row('G10_no_fixedproducts', 'FAIL', not fxp, len(fxp), '; '.join(fxp[:5]))
-        row('G10_val_warnings', 'INFO', True, sum(val_warn.values()), '; '.join(f'{k} {v}' for k, v in val_warn.most_common()))
-        row('G10_dr_categories', 'INFO', True, sum(dr_cat.values()), '; '.join(f'{k} {v}' for k, v in dr_cat.most_common()))
+        row('ncbi_no_fixedproducts', 'FAIL', not fxp, len(fxp), '; '.join(fxp[:5]))
+        row('ncbi_val_warnings', 'INFO', True, sum(val_warn.values()), '; '.join(f'{k} {v}' for k, v in val_warn.most_common()))
+        row('ncbi_dr_categories', 'INFO', True, sum(dr_cat.values()), '; '.join(f'{k} {v}' for k, v in dr_cat.most_common()))
     else:
-        row('G10_G11_ncbi_files', 'FAIL', None, 'missing')
+        row('ncbi_files', 'FAIL', None, 'missing')
 
     with open(a.out, 'w') as o:
         o.write('check\tlevel\tstatus\tvalue\tdetail\n')

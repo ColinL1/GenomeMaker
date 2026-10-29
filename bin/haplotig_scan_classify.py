@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""WP5 haplotig scan (step 2 of the 2026-10-16 review), plus the Stage A flagged regions.
+"""Haplotig scan, plus the regions purge_dups flagged.
 
   longest:  haplotig_scan_classify.py longest braker.gtf.gz braker.aa.gz longest.faa genes.tsv N_PLACED
             longest protein per BRAKER gene; genes.tsv = gene, transcript, chrom, start, end, placed, aa
   classify: haplotig_scan_classify.py classify genes.tsv allvsall.tsv out.tsv [flagged.bed]
             best near-identical copy on a placed scaffold (for placed genes: on another scaffold).
-            flagged.bed (scaffold coordinates, 0-based, from Stage A purge_dups HAPLOTIG/OVLP)
+            flagged.bed (scaffold coordinates, 0-based, from purge_dups HAPLOTIG/OVLP)
             adds the fraction of each gene span inside flagged regions.
 
-out.tsv: gene, chrom, placed, best_placed_copy, pident, qcov, class, stageA_flagged_frac
+out.tsv: gene, chrom, placed, best_placed_copy, pident, qcov, class, purge_dups_flagged_frac
 class: near_identical_placed_copy (pident >= 98, qcov >= 0.8), close_paralog_90, no_close_copy
 """
 import collections
@@ -89,7 +89,7 @@ def cmd_classify(genes_tsv, allvsall, out_path, flagged=None):
             regions[f[0]].append((int(f[1]) + 1, int(f[2])))
     cnt = collections.Counter()
     with open(out_path, 'w') as out:
-        out.write('gene\tchrom\tplaced\tbest_placed_copy\tpident\tqcov\tclass\tstageA_flagged_frac\n')
+        out.write('gene\tchrom\tplaced\tbest_placed_copy\tpident\tqcov\tclass\tpurge_dups_flagged_frac\n')
         for g, d in lab.items():
             b = best.get(g)
             if b and b[0] >= 98 and b[1] >= 0.8:
@@ -101,7 +101,7 @@ def cmd_classify(genes_tsv, allvsall, out_path, flagged=None):
             ov = sum(max(0, min(d['end'], e) - max(d['start'], s) + 1) for s, e in regions.get(d['chrom'], []))
             frac = ov / (d['end'] - d['start'] + 1)
             cnt[c] += 1
-            cnt['stageA_flagged_ge50'] += frac >= 0.5
+            cnt['purge_dups_flagged_ge50'] += frac >= 0.5
             out.write(f"{g}\t{d['chrom']}\t{int(d['placed'])}\t{b[2] if b else ''}\t{b[0] if b else ''}\t"
                       f"{round(b[1], 3) if b else ''}\t{c}\t{frac:.3f}\n")
     print(dict(cnt))

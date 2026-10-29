@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Step 3b: proteins of the refined GFF must equal the current set, except the transcripts in splits.tsv
+"""Proteins of the refined GFF must equal the current set, except the transcripts in splits.tsv
 (split pieces must be substrings of their source protein; status dropped: removed by refine_annotation;
-status cds_edited: CDS corrected by an owner edit, not compared)
+status cds_edited: CDS corrected by a manual transcript edit, not compared)
 and partial proteins that refine_annotation extended by one residue at a partial end
 (cds_3prime_restored, cds_5prime_to_seq_end).
 usage: protein_identity.py refined.faa current.faa splits.tsv out.tsv [screen_actions.tsv]
 Exits non-zero on any unexpected difference. Stop symbols ('*', '.') at the end are ignored.
-With screen_actions.tsv (step 0d), transcripts of genes dropped by the screening are expected to be
+With screen_actions.tsv (contamination screens), transcripts of genes dropped by the screening are expected to be
 missing and are counted separately."""
 import sys
 def fa(p):
@@ -63,7 +63,7 @@ for t, v in old2new.items():
                 screened_out += 1
                 continue
             bad.append((n, 'split product missing')); continue
-        if st == 'cds_edited':      # owner CDS correction (refine_annotation --transcript-edits)
+        if st == 'cds_edited':      # manual CDS correction (refine_annotation --transcript-edits)
             if n not in new: bad.append((n, 'edited transcript missing'))
             else: edited += 1
             continue
@@ -81,7 +81,7 @@ with open(sys.argv[4], 'w') as o:
             f'cds_5prime_extended\t{extended_5prime}\n'
             f'split_source_transcripts\t{len(split_old)}\n'
             f'split_moved_unchanged\t{moved_ok}\nsplit_new_proteins\t{changed_expected}\n'
-            f'cds_edited_by_owner\t{edited}\n'
+            f'cds_edited_manually\t{edited}\n'
             f'dropped_by_refine\t{len(dropped - split_old)}\n'
             f'removed_by_screening\t{screened_out}\nproblems\t{len(bad)}\n')
     for t, w in bad: o.write(f'PROBLEM\t{t}\t{w}\n')

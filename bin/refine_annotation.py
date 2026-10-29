@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Build the refined GFF3 (Plan 1 step 3; master plan WP1-WP6, checks G1-G4).
+"""Build the refined GFF3.
 
 Protein-coding models
-  WP1  UTRs from BRAKER's braker_utr.gtf (stringtie2utr) instead of AGAT's: drop UTRs equal to the
+  UTRs  UTRs from BRAKER's braker_utr.gtf (stringtie2utr) instead of AGAT's: drop UTRs equal to the
        stop codon or <= 3 bp, trim the stop codon off 3'UTRs that start on it, keep a 5'UTR only
        upstream of the CDS and a 3'UTR only downstream of it, and never on a partial end.
        Transcript span = exon extent (removes the AUGUSTUS partial-span extension).
@@ -12,14 +12,14 @@ Protein-coding models
        5'-partial CDS that AUGUSTUS starts 1 bp inside a scaffold end are taken to the end, phase
        +1 (cds_5prime_to_seq_end). UTR exons beyond the first non-canonical (not GT-AG, GC-AG,
        AT-AC) junction out from the CDS are dropped (utr_dropped_noncanonical_junction).
-  WP2  Gene membership recomputed from BRAKER genes: same-strand genes are merged (union-find,
+  Genes Gene membership recomputed from BRAKER genes: same-strand genes are merged (union-find,
        lowest gene number kept) when two transcripts' CDS overlap with frame agreement >= 0.9.
-  WP5  Gene attributes evidence=none|partial|full (gene_support.tsv), possible_haplotig_of=<gene>
-       (near-identical copy on a placed scaffold) and possible_haplotig=stageA (>= 50% of the gene
-       span in a Stage A HAPLOTIG/OVLP region).
-  WP1b UTR exons over the CDS of another gene on the same strand (read-through StringTie transcripts)
+  Tags  Gene attributes evidence=none|partial|full (gene_support.tsv), possible_haplotig_of=<gene>
+       (near-identical copy on a placed scaffold) and possible_haplotig=purge_dups_flagged (>= 50% of the gene
+       span in a purge_dups HAPLOTIG/OVLP region).
+  UTRs  UTR exons over the CDS of another gene on the same strand (read-through StringTie transcripts)
        or over an assembly gap are dropped, with every UTR exon beyond them.
-  WP6  Junctions with split=yes in the gap tags are cut: every transcript of the gene that spans the
+  Gaps  Junctions with split=yes in the gap tags are cut: every transcript of the gene that spans the
        gap is cut in the gap intron; downstream pieces form gene <gene>_s2 (transcripts <gene>_s2.tN).
        A gene spans its transcripts; its ends are not run out to the gap (a partial end at a splice
        consensus is accepted by NCBI, and a run-out hid the problems below).
@@ -35,14 +35,14 @@ Protein-coding models
        a sequence that is not at a splice consensus are dropped (truncated models), and so are partial
        transcripts with a partial end inside the sequence in genes that have a complete transcript.
        splits.tsv lists every dropped transcript (status dropped).
-  Owner edits (--transcript-edits TSV, optional): listed transcripts are dropped, or get a corrected CDS
+  Manual edits (--transcript-edits TSV, optional): listed transcripts are dropped, or get a corrected CDS
        (checked: start, whole codons, final stop, no internal stop, canonical introns); applied before
-       WP2. splits.tsv status dropped / cds_edited.
+       gene membership. splits.tsv status dropped / cds_edited.
 ncRNA
-  WP3  tRNAs kept only if in the EukHighConfidenceFilter ID list and not Undet/Sup, and given
+  tRNA  tRNAs kept only if in the EukHighConfidenceFilter ID list and not Undet/Sup, and given
        product=tRNA-<aa> (funannotate's source for the .tbl product); tRNA pseudogenes are written
        to a separate GFF3.
-  WP4  Rfam: drop miRNA (unless --keep-mirna), drop non-eukaryotic SSU/LSU rRNA models, drop
+  Rfam  Rfam: drop miRNA (unless --keep-mirna), drop non-eukaryotic SSU/LSU rRNA models, drop
        tRNA/Rfam features overlapping an assembly gap (NCBI FeatureBeginsOrEndsInGap), collapse
        identical-coordinate opposite-strand pairs (keep higher rfam_score), drop ncRNAs > 50% inside
        interspersed repeats (not Simple_repeat/Low_complexity) except rRNA and snRNA.
@@ -436,7 +436,7 @@ def model_introns(m):
     return [(ex[i][1] + 1, ex[i + 1][0] - 1) for i in range(len(ex) - 1)]
 
 
-# ----------------------------------------------------------------------------- owner transcript edits
+# ----------------------------------------------------------------------------- manual transcript edits
 def cds_phases(segs, strand, ph0):
     """[(a, b)] in genomic order -> [(a, b, phase)], phases following the frame from the 5' end."""
     out, ph = {}, ph0
@@ -447,7 +447,7 @@ def cds_phases(segs, strand, ph0):
 
 
 def apply_transcript_edits(path, models, seqs):
-    """Owner decisions per transcript (TSV: transcript, action, cds, reason; '#' lines are comments):
+    """Manual decisions per transcript (TSV: transcript, action, cds, reason; '#' lines are comments):
     'drop' removes the transcript (its gene must keep another one); 'cds' replaces its CDS segments
     ('a-b,c-d,...', stop codon included) after checking start codon (if the model had one), whole codons,
     a final stop, no internal stop and canonical introns; UTRs no longer outside the new CDS are dropped.
@@ -472,8 +472,8 @@ def apply_transcript_edits(path, models, seqs):
             per_gene[m['bgene']] -= 1
             models.pop(t)
             dropped.add(t)
-            rep('tx_dropped_owner_edit', t, why)
-            rows.append((m['bgene'], t, '', '', 'dropped', 'tx_dropped_owner_edit'))
+            rep('tx_dropped_manual_edit', t, why)
+            rows.append((m['bgene'], t, '', '', 'dropped', 'tx_dropped_manual_edit'))
         elif action == 'cds':
             s, sq = m['strand'], seqs[m['chrom']]
             segs = sorted(tuple(int(x) for x in p.split('-')) for p in cds_txt.split(','))
@@ -509,10 +509,10 @@ def apply_transcript_edits(path, models, seqs):
                 keep = [u for u in m[kind] if (u[1] < lo if (s == '+') == up else u[0] > hi)]
                 for u in m[kind]:
                     if u not in keep:
-                        rep('utr_dropped_owner_cds_edit', t, f'{kind}:{u[0]}-{u[1]}')
+                        rep('utr_dropped_manual_cds_edit', t, f'{kind}:{u[0]}-{u[1]}')
                 m[kind] = keep
-            rep('cds_replaced_owner_edit', t, f'{old} -> {cds_txt}; {why}')
-            rows.append((m['bgene'], t, m['bgene'], t, 'cds_edited', 'cds_replaced_owner_edit'))
+            rep('cds_replaced_manual_edit', t, f'{old} -> {cds_txt}; {why}')
+            rows.append((m['bgene'], t, m['bgene'], t, 'cds_edited', 'cds_replaced_manual_edit'))
         else:
             FAIL.append(f'transcript edit: {t} unknown action {action!r}')
     return rows, dropped
@@ -530,7 +530,7 @@ def main():
     ap.add_argument('--repeat-max', type=float, default=0.5)
     ap.add_argument('--haplotig-pid', type=float, default=98)
     ap.add_argument('--haplotig-qcov', type=float, default=0.8)
-    ap.add_argument('--stagea-min', type=float, default=0.5)
+    ap.add_argument('--purge-dups-min', type=float, default=0.5)
     ap.add_argument('--transcript-edits', default=None)
     ap.add_argument('--hints', default=None)
     ap.add_argument('--min-intron-reads', type=int, default=3)
@@ -540,7 +540,7 @@ def main():
     btx = read_braker_utr(a.braker_utr_gtf)
     vcds, agat_parent, vsrc, trna_blocks, pseudo_blocks, rfam_blocks = read_validated(a.validated_gff)
 
-    # ---------------- WP1: models
+    # ---------------- models, UTRs
     if set(btx) != set(vcds):
         FAIL.append(f'mRNA ID sets differ: braker {len(btx)}, validated {len(vcds)}, '
                     f'only braker {len(set(btx) - set(vcds))}, only validated {len(set(vcds) - set(btx))}')
@@ -627,13 +627,13 @@ def main():
                          cds=cds_v, utr5=utrs['five_prime_UTR'], utr3=utrs['three_prime_UTR'],
                          start=sorted(d['start_codon']), stop=sorted(d['stop_codon']),
                          has_start=has_start, has_stop=has_stop, note=[], split_of=None, cut_lo=False, cut_hi=False)
-    # ---------------- owner transcript edits (--transcript-edits): drop a transcript, or replace its CDS
+    # ---------------- manual transcript edits (--transcript-edits): drop a transcript, or replace its CDS
     edit_rows, edit_dropped = apply_transcript_edits(a.transcript_edits, models, seqs)
 
     COUNTS['tx_with_utr5'] = sum(1 for m in models.values() if m['utr5'])
     COUNTS['tx_with_utr3'] = sum(1 for m in models.values() if m['utr3'])
 
-    # ---------------- WP2: gene membership
+    # ---------------- gene membership
     bgenes = collections.defaultdict(list)
     for t, m in models.items():
         bgenes[m['bgene']].append(t)
@@ -713,9 +713,9 @@ def main():
     COUNTS['merge_pairs_kept'] = len(agat_pairs & mine_pairs)
     COUNTS['braker_genes'] = len(bgenes)
     COUNTS['agat_genes'] = len(agat_groups)
-    COUNTS['genes_after_wp2'] = len(mine_groups)
+    COUNTS['genes_after_membership'] = len(mine_groups)
 
-    # ---------------- WP1b UTRs over another gene's CDS or over a gap
+    # ---------------- UTRs over another gene's CDS or over a gap
     # stringtie2utr can give two neighbour genes UTRs from one read-through transcript, each running
     # over the other's CDS (NCBI DuplicateFeat when the spans become equal); a UTR exon can also run
     # through an assembly gap. Walking out from the CDS, such a UTR exon and all beyond it are dropped.
@@ -737,7 +737,7 @@ def main():
         m['utr5'] = [u for u in m['utr5'] if u in kept]
         m['utr3'] = [u for u in m['utr3'] if u in kept]
 
-    # ---------------- WP5 inputs
+    # ---------------- evidence and haplotig inputs
     sup = {}
     for line in open(a.gene_support):
         if line.startswith('#') or line.startswith('gene_id'):
@@ -758,7 +758,7 @@ def main():
             continue
         hap[f[0]] = (f[3], float(f[4]) if f[4] else 0, float(f[5]) if f[5] else 0, float(f[7]))
 
-    # ---------------- WP6 tags and splits
+    # ---------------- gap tags and splits
     split_gaps = collections.defaultdict(set)   # final gene -> {(intron lo, hi)} of passing junctions
     for line in open(a.gap_tags):
         f = line.rstrip('\n').split('\t')
@@ -784,7 +784,7 @@ def main():
 
     # AUGUSTUS runs some CDS exons through an assembly gap (an X run in the protein, NCBI
     # FeatureCrossesGap). If every transcript of the gene crosses a gap in its CDS, the CDS is cut at the
-    # gap, keeping the reading frame on both sides, and the gene is cut there like a WP6 split; otherwise
+    # gap, keeping the reading frame on both sides, and the gene is cut there like a gap split; otherwise
     # the transcripts without such a gap stay and the gap-crossing ones are dropped.
     exon_cuts = collections.defaultdict(set)   # gene -> gaps it is cut at
     halves = {}                                # transcript -> gaps, dropped (gene keeps gap-free ones)
@@ -803,7 +803,7 @@ def main():
             halves.update({t: cg[t] for t in ts if cg[t]})
     # a gene that keeps a transcript without a gap in its CDS loses the gap-crossing ones: pieces kept
     # beside a complete transcript make the gene partial in mid-sequence (NCBI PartialProblem,
-    # GENE_PARTIAL_CONFLICT), owner decision 2026-10-23
+    # GENE_PARTIAL_CONFLICT)
     for t, gps in sorted(halves.items(), key=lambda x: (gnum(x[0]), tnum(x[0]))):
         models.pop(t)
         gid = final_gene.pop(t)
@@ -965,7 +965,7 @@ def main():
         if not any(t in models for t in ts):
             rep('gene_dropped_no_transcripts', g)
 
-    # ---------------- assertions on models (G1, G2)
+    # ---------------- assertions on models
     for t, m in models.items():
         L = lens[m['chrom']]
         ex = merge_iv([(x, y) for x, y, _ in m['cds']] + m['utr5'] + m['utr3'])
@@ -1015,16 +1015,16 @@ def main():
                 continue
             if h[0] and h[1] >= a.haplotig_pid and h[2] >= a.haplotig_qcov and 'possible_haplotig_of' not in at:
                 at['possible_haplotig_of'] = bgene_to_final.get(h[0], h[0])
-            if h[3] >= a.stagea_min:
-                at['possible_haplotig'] = 'stageA'
+            if h[3] >= a.purge_dups_min:
+                at['possible_haplotig'] = 'purge_dups_flagged'
         gene_attr[g] = at
     COUNTS['genes_evidence_none'] = sum(1 for v in gene_attr.values() if v['evidence'] == 'none')
     COUNTS['genes_possible_haplotig_of'] = sum(1 for v in gene_attr.values() if 'possible_haplotig_of' in v)
-    COUNTS['genes_possible_haplotig_stageA'] = sum(1 for v in gene_attr.values() if 'possible_haplotig' in v)
+    COUNTS['genes_possible_haplotig_purge_dups'] = sum(1 for v in gene_attr.values() if 'possible_haplotig' in v)
     COUNTS['mrna_possible_gap_fusion'] = sum(1 for m in models.values() if 'possible_gap_fusion' in m['note'])
     COUNTS['mrna_possible_gap_misorder'] = sum(1 for m in models.values() if 'possible_gap_misorder' in m['note'])
 
-    # ---------------- WP3 tRNAs
+    # ---------------- tRNAs
     hc = {l.strip() for l in open(a.trna_hc_ids) if l.strip()}
     keep_trna = []
     iso = collections.Counter()
@@ -1055,7 +1055,7 @@ def main():
             rep('WARN_trna_isotype_gt15pct', i, f'{n}/{len(keep_trna)}')
     COUNTS['trna_pseudogenes_moved'] = len(pseudo_blocks)
 
-    # ---------------- WP4 Rfam
+    # ---------------- Rfam
     rm = read_rm_intervals(a.repeatmasker_out)
     rf = []
     for block in rfam_blocks:
@@ -1098,7 +1098,7 @@ def main():
             continue
         keep_rfam.append(block)
     COUNTS['rfam_kept'] = len(keep_rfam)
-    # G4: no opposite-strand duplicates remain
+    # no opposite-strand duplicates remain
     seen = collections.defaultdict(set)
     for block in keep_rfam:
         f = [x for x in block if x[2] in ('ncRNA', 'rRNA')][0]
