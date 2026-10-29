@@ -1,7 +1,8 @@
 // ============================================================
 // 04_assembly_polish.nf
-// Assembly polishing: Medaka (ONT) → funannotate clean/sort
-// BUSCO, Merqury QV and gfastats before and after polishing
+// Assembly polishing: Medaka (ONT) on the contigs, before the BlobToolKit split.
+// BUSCO and Merqury QV before and after polishing, and the gate that decides.
+// FUNANNOTATE_SORT (renaming, after scaffolding) lives here too.
 // ============================================================
 
 nextflow.enable.dsl = 2
@@ -124,7 +125,7 @@ process MEDAKA_POLISH {
 
     stub:
     """
-    touch medaka_polished.fasta
+    cp ${assembly} medaka_polished.fasta
     echo "MEDAKA_POLISH stub completed"
     
     cat <<-END_VERSIONS > versions.yml
@@ -135,74 +136,22 @@ process MEDAKA_POLISH {
 }
 
 // ============================================================
-// Process: FUNANNOTATE_CLEAN
-// Remove short contigs and small duplicated contigs.
-// Clean and sort are separate processes so that a sort failure (e.g. a bad
-// --base name) does not throw away the multi-hour clean result: the clean task
-// stays cached and only the sort re-runs on -resume.
-// ============================================================
-process FUNANNOTATE_CLEAN {
-    label 'polish_env'
-    tag   "funannotate_clean"
-
-    conda 'bioconda::funannotate'
-    container 'quay.io/biocontainers/funannotate:1.8.17--pyhdfd78af_5'
-
-    input:
-    path assembly
-
-    output:
-    path "clean.fasta",  emit: clean_assembly
-    path "versions.yml", emit: versions
-
-    script:
-    """
-    # Clean: remove contigs shorter than 200 bp, and contigs shorter than N50
-    # that are duplicated elsewhere (one minimap2 run per contig).
-    # --cpus is the number of parallel minimap2 workers; funannotate's default is
-    # 2, which is ~1 day for this assembly's ~16.6k small contigs. Each contig is
-    # tested against a fixed reference, so the result does not depend on --cpus.
-    funannotate clean -i ${assembly} -m 200 --cpus ${task.cpus} -o clean.fasta
-
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        funannotate: "\$(funannotate --version 2>&1 | sed 's/funannotate v//' || echo unknown)"
-        container: "${task.container ?: 'conda'}"
-    END_VERSIONS
-    """
-
-    stub:
-    """
-    touch clean.fasta
-    echo "FUNANNOTATE_CLEAN stub completed"
-
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        funannotate: "stub"
-    END_VERSIONS
-    """
-}
-
-// ============================================================
 // Process: FUNANNOTATE_SORT
-// Sort scaffolds by size (largest first) and rename them <base>_1..N
+// Sort scaffolds by size (largest first) and rename them <base>_1..N.
+// The last step of the assembly: after the screens and RagTag, names only.
 // ============================================================
 process FUNANNOTATE_SORT {
     label 'polish_env'
     label 'res_light'
-    tag   "funannotate_sort_${stage}"
+    tag   "funannotate_sort"
 
     conda 'bioconda::funannotate'
     container 'quay.io/biocontainers/funannotate:1.8.17--pyhdfd78af_5'
-    // Per-stage subdirectory: the polished assembly and (if the polish QC gate
-    // falls back) the unpolished one are both published without clobbering.
-    // (closure: the path refers to the `stage` input, so it must be evaluated per task)
-    publishDir path: { "${params.outdir}/04_polishing/funannotate/${stage}" }, mode: params.publish_mode
+    publishDir "${params.outdir}/03d_scaffolding/sorted", mode: params.publish_mode
 
     input:
     path assembly
     val  scaffold_basename
-    val  stage      // 'polished' | 'unpolished'
 
     output:
     path "clean_sorted.fasta", emit: final_assembly
@@ -218,14 +167,14 @@ process FUNANNOTATE_SORT {
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        funannotate: "\$(funannotate --version 2>&1 | sed 's/funannotate v//' || echo unknown)"
+        funannotate: "\$(funannotate --version 2>&1 | grep -m1 '^funannotate v' | sed 's/funannotate v//' || echo unknown)"
         container: "${task.container ?: 'conda'}"
     END_VERSIONS
     """
 
     stub:
     """
-    touch clean_sorted.fasta
+    cp ${assembly} clean_sorted.fasta
     echo "FUNANNOTATE_SORT stub completed"
 
     cat <<-END_VERSIONS > versions.yml
@@ -237,7 +186,7 @@ process FUNANNOTATE_SORT {
 
 // ============================================================
 // Process: BUSCO_FINAL
-// Final BUSCO on polished assembly
+// BUSCO for the polish gate (prepolish / postpolish)
 // ============================================================
 process BUSCO_FINAL {
     label 'polish_env'
@@ -493,7 +442,7 @@ process POLISH_QC_GATE {
         for f in regressions:
             sys.stderr.write("  - " + f + "\\n")
         sys.stderr.write(
-            "\\nContinuing with the UNPOLISHED assembly (it gets the same clean/sort).\\n"
+            "\\nContinuing with the UNPOLISHED assembly.\\n"
             "The polished assembly is still published. To keep it instead, raise\\n"
             "--polish_qv_tolerance / --polish_busco_tolerance deliberately.\\n")
         print("\\npolish QC gate: REGRESSION -> using unpolished assembly")
@@ -506,10 +455,8 @@ process POLISH_QC_GATE {
 
     # MultiQC custom content: the gate table, with the decision in the section
     # description so the report says plainly which assembly is the final product.
-    final_busco = "postpolish" if decision == "polished" else "final_unpolished"
-    desc = (f"Final assembly: {decision.upper()}. "
-            f"Its BUSCO is the '{final_busco}' sample in the BUSCO section; "
-            "'prepolish' and 'postpolish' are the gate's before/after measurements. "
+    desc = (f"Assembly carried forward: {decision.upper()}. "
+            "'prepolish' and 'postpolish' are the gate's before/after measurements on the same contigs. "
             f"Tolerances: QV {qv_tol}, BUSCO {busco_tol} pp.")
     with open("polish_qc_gate_mqc.tsv", "w") as m:
         m.write("# id: 'polish_qc_gate'\\n")

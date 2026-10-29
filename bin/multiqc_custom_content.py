@@ -146,7 +146,7 @@ def stem(path, suffix):
 
 
 # ---- 02 assembly contiguity (gfastats, every assembly stage) --------------------
-GFA_ORDER = ["input_assembly", "purged", "filtered", "prepolish", "postpolish"]
+GFA_ORDER = ["input_assembly", "filtered", "purged", "final"]
 rows = []
 for f in find("*.gfastats.txt"):
     kv = {}
@@ -161,8 +161,21 @@ for f in find("*.gfastats.txt"):
                  kv.get("GC content %", "NA")))
 rows.sort(key=lambda r: GFA_ORDER.index(r[0]) if r[0] in GFA_ORDER else 99)
 table("stage02_gfastats", "02 Assembly: contiguity (gfastats)",
-      "Assembly statistics at every stage: input, after purge_dups, after the taxonomic filter, before and after polishing.",
+      "Assembly statistics at every checkpoint: the selected or supplied assembly, after the taxonomic split (host bin), "
+      "after purge_dups, and the final assembly (after the length filter, screens, scaffolding and renaming).",
       ["Stage", "Scaffolds", "Total length (bp)", "Scaffold N50", "Contigs", "Contig N50", "Gaps", "GC %"], rows)
+
+# ---- 02b assembler ranking -------------------------------------------------------
+for f in find("assembly_ranking.tsv")[:1]:
+    lines = [l.rstrip("\n").split("\t") for l in open(f) if l.strip()]
+    if len(lines) > 1:
+        hdr = lines[0]
+        want = ["assembler", "complete_pct", "duplicated_pct", "N50", "total_bp", "size_dev", "size_check", "selected", "decided_by"]
+        idx = [hdr.index(w) for w in want if w in hdr]
+        table("stage02b_ranking", "02b Assembler ranking",
+              "BUSCO completeness, size against the expected genome size and N50 of each assembly; the selected "
+              "assembly and the rule that decided.",
+              [hdr[i] for i in idx], [[r[i] if i < len(r) else "" for i in idx] for r in lines[1:]])
 
 # ---- 03 taxonomic filter (blobtools) -------------------------------------------
 rows = []
@@ -310,7 +323,7 @@ def gff_rows(path):
     return feats
 
 
-mito_summary = []   # reused by the pipeline summary
+mito_summary = []
 src = kv_file("mitogenome_source.tsv")
 check_rows = []
 for f in find("mito_gene_check.tsv"):
@@ -349,12 +362,12 @@ if src or check_rows or pol or getorg_logs:
         for line in open(f):
             c = line.rstrip("\n").split("\t")
             if len(c) >= 6 and not line.startswith(("#", "contig_id")) and c[0] != "final_mitogenome" and pol:
-                mito_summary.append(("ONT source contig (pre-purge assembly), circularised by MitoHiFi", f"{c[0]}, {c[5]}"))
+                mito_summary.append(("ONT source contig (selected assembly), circularised by MitoHiFi", f"{c[0]}, {c[5]}"))
     if check_rows:
         bad = [r[0] for r in check_rows if r[4] != "OK"]
         mito_summary.append(("Protein-coding genes full length vs reference",
                              f"{len(check_rows) - len(bad)} of {len(check_rows)}"
-                             + (f" (not OK: {', '.join(bad)}; probable sequence error)" if bad else "")))
+                             + (f" (not OK: {', '.join(bad)})" if bad else "")))
     for f in find("mito_coverage.txt"):
         for line in open(f):
             c = line.split("\t")
@@ -420,6 +433,14 @@ if mitos:
     table("stage05_mito_mitos2", "Mitogenome: de novo annotation (MITOS2)",
           "De novo annotation with MITOS2. 'fragment only' = hit without a gene model.",
           ["Feature", "Type", "Start", "End", "Strand", "Length (bp)", "Note"], named, **PARENT_MITO)
+
+# ---- 05 mito contigs removed from the nuclear assembly (REMOVE_MITO_CONTIGS) ------
+for f in find("mito_contigs_removed.tsv")[:1]:
+    rem = [l.rstrip("\n").split("\t") for l in open(f)][1:]
+    table("stage05_mito_removed", "Mitochondrial contigs in the nuclear assembly",
+          "Contigs of the selected assembly that MitoHiFi matched to the reference mitogenome, and what was done "
+          "with each: removed from the nuclear assembly, or kept (longer than the length limit).",
+          ["Contig", "Length (bp)", "Circular", "Genes", "Action"], rem or [("none found", "", "", "", "")], **PARENT_MITO)
 
 # ---- 06 repeats: RepeatMasker ---------------------------------------------------
 PARENT_REPEATS = dict(
@@ -800,22 +821,6 @@ elif pre_val:
 PARENT_FUNCTIONAL = dict(
     parent_id="stage08_functional", parent_name="08 Functional",
     parent_description="Functional annotation (funannotate) and membrane/signal peptide prediction (Phobius).")
-stats = [f for f in find("*.stats.json") if "annotate_results" in f] or find("annotation_stats.json")
-if stats:
-    a = json.load(open(stats[0])).get("annotation", {})
-    tl = a.get("transcript-level", {})
-    fn = tl.get("functional", {})
-    rows = [("Protein-coding genes", protein_coding(a)), ("All genes (incl. tRNA/ncRNA/rRNA)", a.get("genes")),
-            ("mRNAs", a.get("mRNA")), ("tRNAs", a.get("tRNA")),
-            ("ncRNAs", a.get("ncRNA")), ("rRNAs", a.get("rRNA")),
-            ("Genes with a gene symbol", a.get("common_name")),
-            ("Mean protein length (aa)", tl.get("avg_protein_length")),
-            ("Complete CDS", tl.get("CDS_complete")), ("Single-exon transcripts", tl.get("single_exon_transcript"))]
-    rows += [(f"Functional: {k}", v) for k, v in fn.items()]
-    table("stage08_funannotate", "Annotation summary (funannotate)",
-          "funannotate annotate: gene counts and functional annotation (eggNOG, InterProScan, Phobius, Pfam, dbCAN, MEROPS, SwissProt, BUSCO).",
-          ["Metric", "Value"], [r for r in rows if r[1] is not None], **PARENT_FUNCTIONAL)
-
 # ---- 08 Phobius -----------------------------------------------------------------
 for f in find("phobius_results.txt"):
     tm = sp = n = 0
@@ -832,17 +837,53 @@ for f in find("phobius_results.txt"):
           **PARENT_FUNCTIONAL)
     break
 
-# ---- 10 NCBI validation (table2asn .val) ----------------------------------------
-for f in find("*.val")[:1]:
-    sev = Counter()
-    for line in open(f, errors="replace"):
-        m = re.match(r"(Info|Warning|Error|Reject|Fatal|Critical)\S*: valid \[([A-Za-z0-9_.]+)\]", line, re.I)
+# ---- 10 release curation: QC gate and table2asn -----------------------------------
+PARENT_RELEASE = dict(
+    parent_id="stage10_release", parent_name="10 Release curation",
+    parent_description="Release QC gate results and NCBI table2asn validation of the submission.")
+for f in find("annotation_qc.tsv")[:1]:
+    qc = [l.rstrip("\n").split("\t") for l in open(f)][1:]
+    st = Counter(r[2] for r in qc if len(r) > 2)
+    rows = [r for r in qc if len(r) > 4 and r[2] in ("FAIL", "WARN")]
+    rows.append(("totals", "", "", f"PASS {st['PASS']}; WARN {st['WARN']}; FAIL {st['FAIL']}; NA {st['NA']}", ""))
+    table("stage10_release_qc", "Release QC gate",
+          "Checks on the release files before the release folder is built (bin/annotation_qc_gate.py): "
+          "the WARN and FAIL rows, and the totals. The full table is qc/annotation_qc.tsv in the release folder.",
+          ["Check", "Level", "Status", "Value", "Detail"], rows, **PARENT_RELEASE)
+    dr = [r for r in qc if r and r[0] == "ncbi_dr_categories" and len(r) > 4 and r[4]]
+    if dr:
+        table("stage10_discrepancies", "table2asn discrepancy report (.dr)",
+              "Discrepancy categories of the submission (non-fatal; FATAL ones fail the QC gate).",
+              ["Category", "Count"],
+              [(c.rsplit(" ", 1)[0], c.rsplit(" ", 1)[1]) for c in dr[0][4].split("; ") if " " in c], **PARENT_RELEASE)
+stats_files = [f for f in find("in.stats")]
+if stats_files:
+    rows, level = [], ""
+    for line in open(stats_files[0], errors="replace"):
+        m = re.match(r"\s*(\d+) (\S+)-level messages exist", line)
         if m:
-            sev[(m.group(1).capitalize(), m.group(2))] += 1
-    rows = [(f"{s_} {code}", n) for (s_, code), n in sorted(sev.items(), key=lambda kv: (-kv[1], kv[0]))]
-    table("stage10_table2asn_val", "NCBI validation (table2asn)",
-          "Validator messages in the submission file, by severity and code. The QC gate fails on any "
-          "Error, Reject, Fatal or Critical.", ["Severity and code", "Count"], rows)
+            level = m.group(2)
+            continue
+        m = re.match(r"\s*([A-Za-z0-9_.]+):\s+(\d+)\s*$", line)
+        if m and level:
+            rows.append((m.group(1), level, int(m.group(2))))
+    total = re.search(r"Total messages:\s+(\d+)", open(stats_files[0], errors="replace").read())
+    rows.sort(key=lambda r: (r[1] != "ERROR", -r[2]))
+    table("stage10_table2asn", "NCBI validation (table2asn)",
+          f"table2asn validator messages of the submission (in.stats), by code and level; total {total.group(1) if total else 'NA'}. "
+          "The QC gate fails on any ERROR, REJECT, FATAL or CRITICAL.",
+          ["Code", "Level", "Count"], rows or [("none", "", 0)], **PARENT_RELEASE)
+else:
+    for f in find("*.val")[:1]:
+        sev = Counter()
+        for line in open(f, errors="replace"):
+            m = re.match(r"(Info|Warning|Error|Reject|Fatal|Critical)\S*: valid \[([A-Za-z0-9_.]+)\]", line, re.I)
+            if m:
+                sev[(m.group(2), m.group(1).upper())] += 1
+        rows = [(code, s_, n) for (code, s_), n in sorted(sev.items(), key=lambda kv: (-kv[1], kv[0]))]
+        table("stage10_table2asn", "NCBI validation (table2asn)",
+              "Validator messages in the submission file, by code and severity. The QC gate fails on any "
+              "Error, Reject, Fatal or Critical.", ["Code", "Level", "Count"], rows, **PARENT_RELEASE)
 
 # ---- 00 NanoPlot stats: give raw/trimmed files distinct names -------------------
 # Both NanoPlot runs write NanoStats.txt, so MultiQC saw one sample name twice and
@@ -856,89 +897,68 @@ for f in find("NanoStats*.txt"):
         tag = src.replace("qc_nanoplot_", "ONT_")
         shutil.copyfile(f, os.path.join(OUT, f"{tag}.{os.path.basename(f)}"))
 
-# ---- Pipeline summary (top of report) -------------------------------------------
-# Aggregates values already computed elsewhere; nothing is recomputed.
-def gate_info():
-    for f in find("polish_qc_gate_mqc.tsv"):
-        txt = open(f).read()
-        fin = re.search(r"Final assembly: (\w+)", txt)
-        verdicts = {}
-        for line in txt.splitlines():
-            c = line.split("\t")
-            if len(c) == 5 and c[0] != "metric":
-                verdicts[c[0]] = (c[1], c[2], c[4])
-        return (fin.group(1).lower() if fin else None), verdicts
-    for f in find("polish_qc_report.tsv"):   # older runs: no mqc table
-        verdicts = {}
-        for line in open(f).read().splitlines()[1:]:
-            c = line.split("\t")
-            if len(c) == 5:
-                verdicts[c[0]] = (c[1], c[2], c[4])
-        fail = any(v[2] == "FAIL" for v in verdicts.values())
-        return ("unpolished" if fail else "polished"), verdicts
-    return None, {}
-
-def busco_c(stage):
-    for f in find(f"{stage}.*short_summary*.txt"):
-        m = re.search(r"C:([\d.]+)%\[S:([\d.]+)%,D:([\d.]+)%\],F:([\d.]+)%,M:([\d.]+)%", open(f).read())
-        if m:
-            return m.groups()
-    return None
-
-def gfa(stage):
-    for f in find(f"{stage}.gfastats.txt"):
-        kv = {}
-        for line in open(f):
-            if ":" in line:
-                k, v = line.split(":", 1)
-                kv[k.strip()] = v.strip()
-        return kv
-    return {}
-
-decision, verdicts = gate_info()
-if decision:
-    final_busco_stage = "final_unpolished" if decision == "unpolished" else "postpolish"
-    # gfastats is run on the gate inputs: the unpolished final product is the
-    # prepolish (filtered) assembly after funannotate clean/sort.
-    final_gfa_stage = "prepolish" if decision == "unpolished" else "postpolish"
-    rows = [("Final assembly carried forward",
-             "unpolished" if decision == "unpolished" else "polished (Medaka)", "")]
-    g = gfa(final_gfa_stage)
-    note = " (before funannotate clean/sort)" if decision == "unpolished" else ""
-    if g:
-        rows += [("Genome size (bp)" + note, g.get("Total scaffold length", "NA"), ""),
-                 ("Scaffolds" + note, g.get("# scaffolds", "NA"), ""),
-                 ("Scaffold N50 (bp)", g.get("Scaffold N50", "NA"), ""),
-                 ("Contig N50 (bp)", g.get("Contig N50", "NA"), ""),
-                 ("GC %", g.get("GC content %", "NA"), "")]
-    b = busco_c(final_busco_stage)
-    if b:
-        rows.append(("BUSCO complete % (final assembly)", b[0], ""))
-        rows.append(("BUSCO missing % (final assembly)", b[4], ""))
-    for metric, label in (("merqury_qv", "Polish QC gate: Merqury QV (pre -> post)"),
-                          ("busco_completeness", "Polish QC gate: BUSCO C% (pre -> post)")):
-        if metric in verdicts:
-            pre, post, v = verdicts[metric]
-            rows.append((label, f"{pre} -> {post}", v))
-    rows.append(("Polish QC gate: decision",
-                 "unpolished" if decision == "unpolished" else "polished",
-                 "FAIL" if decision == "unpolished" else "PASS"))
-    stats = [f for f in find("*.stats.json") if "annotate_results" in f]
-    if stats:
-        a = json.load(open(stats[0])).get("annotation", {})
-        rows += [("Protein-coding genes (final annotation)", protein_coding(a) or "NA", ""),
-                 ("All genes incl. tRNA/ncRNA/rRNA (final annotation)", a.get("genes", "NA"), ""),
-                 ("mRNAs / tRNAs / ncRNAs / rRNAs",
-                  f'{a.get("mRNA", "NA")} / {a.get("tRNA", "NA")} / {a.get("ncRNA", "NA")} / {a.get("rRNA", "NA")}', "")]
-    d = dict(mito_summary)
-    if d:
-        rows.append(("Mitogenome (separate from the nuclear assembly)",
-                     f'{d.get("Length (bp)", "NA")} bp; {d.get("Sequence source", "NA")}; protein-coding genes '
-                     f'full length: {d.get("Protein-coding genes full length vs reference", "not checked")}',
-                     "" if "Protein-coding genes full length vs reference" not in d
-                     else ("FAIL" if "not OK" in d["Protein-coding genes full length vs reference"] else "PASS")))
-    table("pipeline_summary", "Pipeline summary",
-          "Final assembly and annotation, with QC gate results.",
+# ---- Run overview (top of report) ----------------------------------------------
+# What ran and what the automatic steps decided; the numbers are in the summary table below.
+facts = kv_file("run_facts.tsv")
+if facts:
+    rows = [("Mode", facts.get("mode", "NA"), ""), ("Strategy", facts.get("strategy", "NA"), "")]
+    for f in find("assembly_ranking.tsv")[:1]:
+        sel = [l.rstrip("\n").split("\t") for l in open(f)]
+        hdr = sel[0]
+        for r in sel[1:]:
+            d = dict(zip(hdr, r))
+            if d.get("selected") == "yes":
+                flag = d.get("size_check", "")
+                rows.append(("Assembler ranking", f'{d["assembler"]} selected ({d.get("decided_by", "")})',
+                             flag if flag.startswith("SIZE_OUTLIER") else ""))
+    for f in find("mito_contigs_removed.tsv")[:1]:
+        rem = [l.rstrip("\n").split("\t") for l in open(f)][1:]
+        n = sum(1 for r in rem if len(r) > 4 and r[4] == "removed")
+        rows.append(("Mito contigs removed from the nuclear assembly", f"{n} ({', '.join(r[0] for r in rem if len(r) > 4 and r[4] == 'removed') or 'none found'})", ""))
+    if facts.get("mitogenome") == "off":
+        rows.append(("Mito contigs removed from the nuclear assembly", "not checked (run_mitogenome=false)", ""))
+    for f in find("polish_qc_report.tsv")[:1]:
+        dec = open(find("polish_decision.txt")[0]).read().strip() if find("polish_decision.txt") else "NA"
+        rep = {l.split("\t")[0]: l.rstrip("\n").split("\t") for l in open(f)}
+        det = "; ".join(f"{k} {v[1]} -> {v[2]}" for k, v in rep.items() if k != "metric" and len(v) > 2)
+        rows.append(("Polish QC gate", f"{dec} contigs carried forward ({det})", "PASS" if dec == "polished" else "FAIL"))
+    if facts.get("polishing") == "off":
+        rows.append(("Polishing", "not run (run_polish=false)", ""))
+    elif facts.get("polish_qc_gate") == "off":
+        rows.append(("Polish QC gate", "not run: Medaka output used unchecked (run_polish_qc=false)", ""))
+    for f in find("purge_qc_report.tsv")[:1]:
+        rep = [l.rstrip("\n").split("\t") for l in open(f)][1:]
+        det = "; ".join(f"{r[0]} {r[1]} -> {r[2]}" for r in rep if len(r) > 2)
+        verdict = "FAIL" if any(r[4] == "FAIL" for r in rep) else ("WARN" if any(r[4] == "WARN" for r in rep) else "PASS")
+        rows.append(("Purge QC gate", det, verdict))
+    if facts.get("purge_dups") == "off":
+        rows.append(("purge_dups", "not run (run_purge_dups=false)", ""))
+    for f in find("length_removed.tsv")[:1]:
+        rem = [l.rstrip("\n").split("\t") for l in open(f)][1:]
+        rows.append((f"Length filter", f"{len(rem)} sequences removed ({sum(int(r[1]) for r in rem if len(r) > 1 and r[1].isdigit()):,} bp)", ""))
+    off = [k.replace("_", " ") for k, v in facts.items() if v == "off" and k not in ("mitogenome", "polishing", "purge_dups", "polish_qc_gate")]
+    if off:
+        rows.append(("Stages switched off", ", ".join(off), ""))
+    table("pipeline_summary", "Run overview",
+          "How this run was made: mode, strategy, the automatic choices (assembler ranking, QC gates) and the stages that were off.",
           ["Item", "Value", "Gate status"], rows)
+
+# ---- Genome and annotation summary (summary.tsv of the delivered files) ----------
+for f in find("summary.tsv")[:1]:
+    rows = [l.rstrip("\n").split("\t") for l in open(f)][1:]
+    table("genome_summary", "Genome and annotation summary",
+          "Computed from the delivered files (final/, or release_curation/ with the release curation); also qc/summary.tsv.",
+          ["Metric", "Section", "Value"], [(r[1], r[0], r[2]) for r in rows if len(r) > 2])
+
+# ---- Methods (bottom of report) --------------------------------------------------
+for f in find("methods.md")[:1]:
+    import html as _html
+    items = [l[2:].strip() for l in open(f) if l.startswith("- ")]
+    def md(t):
+        t = _html.escape(t)
+        return re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
+    body = "<ul>" + "".join(f"<li>{md(i)}</li>" for i in items) + "</ul>"
+    html("methods", "Methods", "The steps of this run, the tool versions they recorded and the automatic decisions "
+         "(also qc/methods.md).", body)
 
 print("\n".join(sorted(os.listdir(OUT))))

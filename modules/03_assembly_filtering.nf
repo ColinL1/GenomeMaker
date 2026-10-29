@@ -26,7 +26,7 @@
 //     output of each step (`blobtools add` modifies it in place)
 //   - BLOBTOOLS_APPLY_FILTER: per-category filter + FASTA (host/symbiont),
 //     by automatic taxon filter or an optional manually exported JSON
-//   - PASSTHROUGH: no-op used when params.skip_blobtools = true
+//   - PASSTHROUGH: no-op used when params.run_blobtools = false
 //
 // This file has NO workflow{} block -- see
 // subworkflows/03_assembly_filtering.nf for the ASSEMBLY_FILTERING

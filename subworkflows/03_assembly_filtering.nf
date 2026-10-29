@@ -3,11 +3,12 @@
 // BlobToolKit-based assembly filtering -- WORKFLOW ONLY
 // Process definitions live in modules/03_assembly_filtering.nf
 //
-// Signature matches main.nf's call site:
-//   ASSEMBLY_FILTERING(purged_assembly_path, porechopped_ch, busco_table, meta_yaml,
+// Runs on the unpurged contigs (after the mito-contig removal and polishing), so the host and
+// symbiont bins are decided by taxonomy before purge_dups' coverage cutoffs see them:
+//   ASSEMBLY_FILTERING(contigs, porechopped_ch, busco_table,
 //                      blast_db_path, blast_taxdump_path, diamond_db_path)
 // with two named outputs downstream code depends on:
-//   .out.filtered_assembly  -- host-only fasta, feeds ASSEMBLY_POLISHING
+//   .out.filtered_assembly  -- host-only fasta, feeds PURGE_DUPS
 //   .out.symbiont_assembly  -- symbiont-only fasta
 //
 // Categories/taxon names to keep are NOT passed in by main.nf, so they're
@@ -15,7 +16,7 @@
 // ASSUMPTION: add these to nextflow.config if you want non-default taxa:
 //   params.host_taxon_name     = 'Cnidaria'
 //   params.symbiont_taxon_name = 'Symbiodiniaceae'
-// If skip_blobtools=true, symbiont_assembly emits an empty channel since
+// If run_blobtools=false, symbiont_assembly emits an empty channel since
 // PASSTHROUGH never separates a symbiont fraction.
 // ============================================================
 
@@ -48,7 +49,7 @@ workflow ASSEMBLY_FILTERING {
         def versions_ch = channel.empty()
         def report_ch   = channel.empty()   // files for the MultiQC report
 
-        if (params.skip_blobtools.toString().toBoolean()) {
+        if (!params.run_blobtools.toString().toBoolean()) {
             // Skip filtering, pass assembly through
             PASSTHROUGH(assembly)
             filtered  = PASSTHROUGH.out.filtered_assembly

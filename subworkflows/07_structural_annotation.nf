@@ -158,7 +158,7 @@ workflow STRUCTURAL_ANNOTATION {
         // failing the run. See modules/07b_annotation_qc.nf for what braker.pl
         // already covers and is therefore NOT duplicated here.
         def compleasm_summary = channel.empty()
-        if (params.run_polish_qc.toString().toBoolean()) {
+        if (params.run_compleasm.toString().toBoolean()) {
             COMPLEASM(assembly, params.busco_lineage,
                       channel.value(params.compleasm_db
                           ? file(params.compleasm_db)

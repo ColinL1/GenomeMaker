@@ -10,8 +10,8 @@ usage: annotation_qc_gate.py --release-gff R.gff3 --refined-gff lifted.gff3 --re
    --protein-identity protein_identity.tsv --release-sets-report release_sets_report.tsv
    --final-proteins F.proteins.fa --refined-proteins refined.proteins.faa --id-map id_map.tsv
    --gt-report gt1.txt [--gt-report gt2.txt] --stats-json F.stats.json --summary-tsv summary.tsv
-   --readme README.md --multiqc-tsv pipeline_summary_mqc.tsv --name-map scaffold_name_map.tsv
-   --agp scaffolds.agp --fasta scaffolds.fa --repeat-lib repeats_classified.lib --relabel-report relabel_report.tsv
+   [--name-map scaffold_name_map.tsv --agp ragtag.scaffold.agp --gap-evidence align_genus --gap-length 100]
+   --fasta scaffolds.fa [--contigs scaffold_input.fa] --repeat-lib repeats_classified.lib --relabel-report relabel_report.tsv
    --fcs-adaptor fcs_adaptor_report.txt --fcs-gx x.fcs_gx_report.txt --vecscreen vecscreen_regions.tsv
    [--vecscreen-accepted accepted.tsv] --val-dir ncbi/
    --locus-tag X --sbt path --isolate X [--n-placed 14 --chrom-prefix NC_]
@@ -22,6 +22,7 @@ import argparse
 import bisect
 import collections
 import glob
+import hashlib
 import json
 import os
 import re
@@ -140,8 +141,8 @@ def model_checks(gff, seqs):
 def main():
     ap = argparse.ArgumentParser()
     for k in ('release-gff', 'refined-gff', 'refine-report', 'protein-identity', 'release-sets-report',
-              'final-proteins', 'refined-proteins', 'id-map', 'stats-json', 'summary-tsv', 'readme',
-              'multiqc-tsv', 'name-map', 'agp', 'fasta', 'repeat-lib', 'relabel-report', 'fcs-adaptor',
+              'final-proteins', 'refined-proteins', 'id-map', 'stats-json', 'summary-tsv',
+              'name-map', 'agp', 'fasta', 'contigs', 'repeat-lib', 'relabel-report', 'fcs-adaptor',
               'fcs-gx', 'fcs-gx-accepted', 'vecscreen', 'vecscreen-accepted', 'val-dir', 'locus-tag', 'sbt',
               'isolate', 'strain', 'out'):
         ap.add_argument('--' + k)
@@ -158,6 +159,10 @@ def main():
                     help='every lineage in the .sqn must start with this')
     ap.add_argument('--expected-division', default='',
                     help='taxonomic division every organism must carry (e.g. INV); empty = no check')
+    ap.add_argument('--gap-evidence', default='align_genus',
+                    help='AGP linkage evidence every scaffold gap must carry (AGP spelling, e.g. align_genus)')
+    ap.add_argument('--gap-length', type=int, default=100,
+                    help='length of every scaffold gap (RagTag unknown-size gaps); 0 = any length (gap sizes inferred)')
     a = ap.parse_args()
 
     # ---------------- model structure on the release GFF
@@ -306,15 +311,15 @@ def main():
         nums['stats.json'] = g - int(an.get('tRNA', 0)) - int(an.get('rRNA', 0)) - int(an.get('ncRNA', 0))
     if pc_genes:
         nums['release_gff'] = len(pc_genes)
-    for key, p in (('summary.tsv', a.summary_tsv), ('README', a.readme), ('MultiQC', a.multiqc_tsv)):
-        if have(p):
-            m = re.search(r'[Pp]rotein-coding genes\D{0,40}?([\d,]+)', open(p).read())
-            nums[key] = int(m.group(1).replace(',', '')) if m else None
+    if have(a.summary_tsv):
+        m = re.search(r'[Pp]rotein-coding genes\D{0,40}?([\d,]+)', open(a.summary_tsv).read())
+        nums['summary.tsv'] = int(m.group(1).replace(',', '')) if m else None
     vals = set(nums.values())
-    row('count_one_protein_coding_number', 'FAIL', len(nums) == 5 and len(vals) == 1 and None not in vals,
+    row('count_one_protein_coding_number', 'FAIL', len(nums) == 3 and len(vals) == 1 and None not in vals,
         ';'.join(f'{k}={v}' for k, v in nums.items()))
 
-    # ---------------- scaffold names and AGP
+    # ---------------- scaffold names and AGP (only when RagTag scaffolded: no map, no AGP otherwise)
+    to_final = {}
     if have(a.name_map):
         st = collections.Counter()
         chrom_ok = 0
@@ -323,6 +328,7 @@ def main():
             if x[0] in ('final_name', '-'):
                 continue
             st[x[3]] += 1
+            to_final[x[1]] = x[0]
             m = re.match(r'scaffold_(\d+)$', x[0])
             if m and int(m.group(1)) <= a.n_placed and x[1].startswith(a.chrom_prefix) and x[3] != 'not_found':
                 chrom_ok += 1
@@ -330,23 +336,46 @@ def main():
         row('names_scaffold_name_map', 'FAIL', st['not_found'] == 0 and chrom_check,
             dict(st), f'chromosome scaffolds mapped to {a.chrom_prefix or "-"}: {chrom_ok}/{a.n_placed}')
     else:
-        row('names_scaffold_name_map', 'FAIL', None, 'missing')
-    if have([a.agp, a.fasta]):
+        row('names_scaffold_name_map', 'INFO', None, 'no scaffolding', 'no RagTag run: scaffold names are the sorted contigs')
+    if have([a.agp, a.fasta]) and to_final:
+        # AGP object names are RagTag's; the released FASTA carries the sorted names (name map)
         lens = {k: len(v) for k, v in fasta(a.fasta).items()}
         end = collections.Counter()
-        gaps_bad = gaps = 0
+        gaps_bad = gaps = unmapped = 0
         for l in open(a.agp):
-            if l.startswith('#'):
+            if l.startswith('#') or not l.strip():
                 continue
             x = l.rstrip('\n').split('\t')
-            end[x[0]] = max(end[x[0]], int(x[2]))
+            obj = to_final.get(x[0])
+            if obj is None:
+                unmapped += 1
+                continue
+            end[obj] = max(end[obj], int(x[2]))
             if x[4] in ('N', 'U'):
                 gaps += 1
-                if not (x[4] == 'U' and x[5] == '100' and x[7] == 'yes' and x[8] == 'align_genus'):
+                length_ok = a.gap_length == 0 or x[5] == str(a.gap_length)
+                if not (length_ok and x[7] == 'yes' and x[8] == a.gap_evidence):
                     gaps_bad += 1
         cover = sum(1 for k, L in lens.items() if end[k] != L)
-        row('names_AGP_gaps_U100_align_genus', 'FAIL', gaps_bad == 0 and cover == 0, f'{gaps} gaps',
-            f'bad gap lines {gaps_bad}; scaffolds not covered exactly {cover}')
+        row('names_AGP_gaps', 'FAIL', gaps_bad == 0 and cover == 0 and unmapped == 0, f'{gaps} gaps',
+            f'gap lines not {a.gap_length or "any"} bp / {a.gap_evidence}: {gaps_bad}; '
+            f'scaffolds not covered exactly {cover}; AGP lines with no name in the map {unmapped}')
+
+    # ---------------- the released sequence is the scaffolded screened contigs: only gaps and names added
+    if have([a.contigs, a.fasta]):
+        def segments(seqs):
+            c = collections.Counter()
+            for s in seqs:
+                for seg in re.split(r'[Nn]+', s.upper()):
+                    if seg:
+                        rc = seg.translate(REVCOMP)[::-1]
+                        c[hashlib.md5(min(seg, rc).encode()).hexdigest()] += 1
+            return c
+        rel, inp = segments(fasta(a.fasta).values()), segments(fasta(a.contigs).values())
+        only_rel, only_inp = sum((rel - inp).values()), sum((inp - rel).values())
+        row('sequence_unchanged_after_screens', 'FAIL', only_rel == 0 and only_inp == 0,
+            f'{sum(rel.values())} segments',
+            f'segments only in the release {only_rel}; only in the screened contigs {only_inp} (N runs split segments)')
 
     # ---------------- repeat library
     if have(a.repeat_lib):

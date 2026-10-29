@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Summary of a genome + annotation release, computed from the released files only.
+"""Genome and annotation summary, computed from the delivered files only (final/ or release_curation/).
 
-usage: release_summary.py --fasta scaffolds.fa --gff release.gff3 --stats stats.json --annotations annotations.txt
+usage: genome_summary.py --fasta scaffolds.fa [--gff annotation.gff3 --stats stats.json --annotations annotations.txt]
          [--compleasm summary.txt] [--busco short_summary.txt] [--qv merqury.qv] [--repeat-tbl repeatmasker.tbl] [--hc-report release_sets_report.tsv]
          [--mito-fasta mitogenome.fasta] [--mito-check mito_gene_check.tsv] [--n-chrom 14]
          [--symbiont-busco short_summary.txt] [--funannotate-busco-db metazoa] --out summary.tsv
 Lineage labels are read from the BUSCO summaries themselves; --funannotate-busco-db names the set
-behind funannotate's 'busco' count.
+behind funannotate's 'busco' count. Without --gff/--stats (no annotation) only the assembly,
+completeness, repeat and mitogenome rows are written.
 out: section, metric, value
 """
 import argparse
@@ -109,65 +110,66 @@ if a.busco:
 if a.symbiont_busco:
     busco_row(a.symbiont_busco, 'Symbiont bin BUSCO')
 
-# ---------------- annotation
-an = json.load(open(a.stats))['annotation']
-tl = an.get('transcript-level', {})
-pc = an['genes'] - an.get('tRNA', 0) - an.get('rRNA', 0) - an.get('ncRNA', 0)
-utr5, utr3, mrna_per_gene, gene_type = set(), set(), collections.Counter(), {}
-for line in open(a.gff):
-    f = line.rstrip('\n').split('\t')
-    if len(f) < 9:
-        continue
-    if f[2] in ('mRNA', 'tRNA', 'ncRNA', 'rRNA'):
-        gene_type[re.search(r'Parent=([^;]+)', f[8]).group(1)] = f[2]
-    if f[2] == 'mRNA':
-        mrna_per_gene[re.search(r'Parent=([^;]+)', f[8]).group(1)] += 1
-    elif f[2] in ('five_prime_UTR', 'three_prime_UTR'):
-        (utr5 if f[2][0] == 'f' else utr3).add(re.search(r'Parent=([^;]+)', f[8]).group(1))
-add('Annotation', 'Protein-coding genes', pc)
-add('Annotation', 'mRNAs', an.get('mRNA'))
-add('Annotation', 'Genes with alternative isoforms', sum(1 for n in mrna_per_gene.values() if n > 1))
-ntype = collections.Counter(gene_type.values())     # RNA genes from the release GFF3 (rRNA fragments removed)
-add('Annotation', 'tRNA genes', ntype['tRNA'])
-add('Annotation', 'ncRNA genes', ntype['ncRNA'])
-add('Annotation', 'rRNA genes', ntype['rRNA'])
-add('Annotation', 'Mean gene length (bp)', round(an.get('avg_gene_length', 0)))
-add('Annotation', 'Mean protein length (aa)', round(tl.get('avg_protein_length', 0)))
-add('Annotation', 'Exons per mRNA (mean)', round(tl.get('total_cds_exons', 0) / max(1, an.get('mRNA', 1)), 1))
-add('Annotation', 'Single-exon mRNAs', tl.get('single_exon_transcript'))
-add('Annotation', 'mRNAs with complete CDS (start and stop codon)', tl.get('CDS_complete'))
-add('Annotation', 'mRNAs with partial CDS (no start, no stop, or neither)',
-    tl.get('CDS_no-start', 0) + tl.get('CDS_no-stop', 0) + tl.get('CDS_no-start_no-stop', 0))
-add('Annotation', "mRNAs with 5' UTR", len(utr5))
-add('Annotation', "mRNAs with 3' UTR", len(utr3))
-if a.hc_report:
-    d = dict(l.rstrip('\n').split('\t')[:2] for l in open(a.hc_report) if '\t' in l)
-    add('Annotation', 'High-confidence protein-coding genes (subset)', d.get('hc_protein_coding_genes'))
-# product per gene from the release GFF3 (first mRNA); annotations.txt omits genes that share a span
-named = hyp = 0
-seen = set()
-for line in open(a.gff):
-    f = line.rstrip('\n').split('\t')
-    if len(f) < 9 or f[2] != 'mRNA':
-        continue
-    g = re.search(r'Parent=([^;]+)', f[8]).group(1)
-    if g in seen:
-        continue
-    seen.add(g)
-    m = re.search(r'product=([^;]+)', f[8])
-    if m and not m.group(1).startswith('hypothetical protein'):
-        named += 1
-    else:
-        hyp += 1
-add('Functional', 'Genes with a product name', named)
-add('Functional', 'Genes named hypothetical protein', hyp)
-add('Functional', 'Genes with a gene symbol', an.get('common_name'))
-labels = {'go_terms': 'mRNAs with GO terms', 'interproscan': 'mRNAs with InterPro domains', 'eggnog': 'mRNAs with eggNOG',
-          'pfam': 'mRNAs with Pfam domains', 'cazyme': 'mRNAs with CAZyme', 'merops': 'mRNAs with MEROPS peptidase',
-          'busco': f"mRNAs matching BUSCO ({a.funannotate_busco_db or 'funannotate'})",
-          'secretion': 'mRNAs with secretion signal'}
-for k, v in tl.get('functional', {}).items():
-    add('Functional', labels.get(k, k), v)
+# ---------------- annotation (with an annotation)
+if a.stats and a.gff:
+    an = json.load(open(a.stats))['annotation']
+    tl = an.get('transcript-level', {})
+    pc = an['genes'] - an.get('tRNA', 0) - an.get('rRNA', 0) - an.get('ncRNA', 0)
+    utr5, utr3, mrna_per_gene, gene_type = set(), set(), collections.Counter(), {}
+    for line in open(a.gff):
+        f = line.rstrip('\n').split('\t')
+        if len(f) < 9:
+            continue
+        if f[2] in ('mRNA', 'tRNA', 'ncRNA', 'rRNA'):
+            gene_type[re.search(r'Parent=([^;]+)', f[8]).group(1)] = f[2]
+        if f[2] == 'mRNA':
+            mrna_per_gene[re.search(r'Parent=([^;]+)', f[8]).group(1)] += 1
+        elif f[2] in ('five_prime_UTR', 'three_prime_UTR'):
+            (utr5 if f[2][0] == 'f' else utr3).add(re.search(r'Parent=([^;]+)', f[8]).group(1))
+    add('Annotation', 'Protein-coding genes', pc)
+    add('Annotation', 'mRNAs', an.get('mRNA'))
+    add('Annotation', 'Genes with alternative isoforms', sum(1 for n in mrna_per_gene.values() if n > 1))
+    ntype = collections.Counter(gene_type.values())     # RNA genes from the release GFF3 (rRNA fragments removed)
+    add('Annotation', 'tRNA genes', ntype['tRNA'])
+    add('Annotation', 'ncRNA genes', ntype['ncRNA'])
+    add('Annotation', 'rRNA genes', ntype['rRNA'])
+    add('Annotation', 'Mean gene length (bp)', round(an.get('avg_gene_length', 0)))
+    add('Annotation', 'Mean protein length (aa)', round(tl.get('avg_protein_length', 0)))
+    add('Annotation', 'Exons per mRNA (mean)', round(tl.get('total_cds_exons', 0) / max(1, an.get('mRNA', 1)), 1))
+    add('Annotation', 'Single-exon mRNAs', tl.get('single_exon_transcript'))
+    add('Annotation', 'mRNAs with complete CDS (start and stop codon)', tl.get('CDS_complete'))
+    add('Annotation', 'mRNAs with partial CDS (no start, no stop, or neither)',
+        tl.get('CDS_no-start', 0) + tl.get('CDS_no-stop', 0) + tl.get('CDS_no-start_no-stop', 0))
+    add('Annotation', "mRNAs with 5' UTR", len(utr5))
+    add('Annotation', "mRNAs with 3' UTR", len(utr3))
+    if a.hc_report:
+        d = dict(l.rstrip('\n').split('\t')[:2] for l in open(a.hc_report) if '\t' in l)
+        add('Annotation', 'High-confidence protein-coding genes (subset)', d.get('hc_protein_coding_genes'))
+    # product per gene from the release GFF3 (first mRNA); annotations.txt omits genes that share a span
+    named = hyp = 0
+    seen = set()
+    for line in open(a.gff):
+        f = line.rstrip('\n').split('\t')
+        if len(f) < 9 or f[2] != 'mRNA':
+            continue
+        g = re.search(r'Parent=([^;]+)', f[8]).group(1)
+        if g in seen:
+            continue
+        seen.add(g)
+        m = re.search(r'product=([^;]+)', f[8])
+        if m and not m.group(1).startswith('hypothetical protein'):
+            named += 1
+        else:
+            hyp += 1
+    add('Functional', 'Genes with a product name', named)
+    add('Functional', 'Genes named hypothetical protein', hyp)
+    add('Functional', 'Genes with a gene symbol', an.get('common_name'))
+    labels = {'go_terms': 'mRNAs with GO terms', 'interproscan': 'mRNAs with InterPro domains', 'eggnog': 'mRNAs with eggNOG',
+              'pfam': 'mRNAs with Pfam domains', 'cazyme': 'mRNAs with CAZyme', 'merops': 'mRNAs with MEROPS peptidase',
+              'busco': f"mRNAs matching BUSCO ({a.funannotate_busco_db or 'funannotate'})",
+              'secretion': 'mRNAs with secretion signal'}
+    for k, v in tl.get('functional', {}).items():
+        add('Functional', labels.get(k, k), v)
 
 # ---------------- repeats
 if a.repeat_tbl:

@@ -30,8 +30,8 @@ workflow PREPROCESS_READS {
         READ_QC(ont_raw_reads, 'raw')
         versions_ch = versions_ch.mix(READ_QC.out.versions)
 
-        if (params.skip_porechop.toString().toBoolean()) {
-            log.info "Skipping PORECHOP (skip_porechop=true); using raw reads directly"
+        if (!params.run_porechop.toString().toBoolean()) {
+            log.info "Skipping PORECHOP (run_porechop=false); using raw reads directly"
             trimmed_reads  = ont_raw_reads
             trimmed_qc_dir = READ_QC.out.qc_dir
             trimmed_raw_qc = READ_QC.out.fastqc_dir

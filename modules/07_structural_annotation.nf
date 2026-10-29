@@ -292,82 +292,6 @@ process MERGE_BAMS {
 }
 
 // ============================================================
-// Process: SPLIT_STRANDED_BAM
-// Split merged BAM by read direction for stranded RNA-seq
-// ============================================================
-process SPLIT_STRANDED_BAM {
-    label 'structural_env'
-    tag   "split_strand"
-
-    conda 'bioconda::samtools'
-    container 'quay.io/biocontainers/samtools:1.21--h96c455f_1'
-    publishDir "${params.outdir}/07_structural_annotation/rnaseq/stranded", mode: params.publish_mode
-
-    input:
-    path bam
-
-    output:
-    path "plus_strand.bam",  emit: plus_bam
-    path "minus_strand.bam", emit: minus_bam
-    path "versions.yml", emit: versions
-
-    script:
-    // Uses samtools' own flag predicates instead of awk equality on column 2.
-    // The previous `$2==99 || $2==83` style silently discarded every read whose
-    // flag carried any additional bit -- secondary (256), supplementary (2048),
-    // duplicate (1024), mate-unmapped (8) -- because those make the integer
-    // something other than the four values listed. On a real STAR BAM that is a
-    // large and silent loss.
-    //
-    // dUTP (reverse-stranded, the common Illumina protocol): the transcript
-    // strand is opposite R1. So
-    //   plus-strand transcripts  = R1 on reverse (-f 80)  + R2 on forward (-f 160)
-    //   minus-strand transcripts = R1 on forward (-f 64,-F 16) + R2 on reverse (-f 144)
-    // -F 3844 drops unmapped/secondary/QC-fail/duplicate/supplementary throughout.
-    """
-    FILT="-F 3844"
-
-    # plus-strand transcripts
-    samtools view -b \$FILT -f 80  -o p1.bam ${bam}
-    samtools view -b \$FILT -f 160 -o p2.bam ${bam}
-    samtools merge -f -@ ${task.cpus} plus_strand.bam p1.bam p2.bam
-
-    # minus-strand transcripts
-    samtools view -b \$FILT -f 144 -o m1.bam ${bam}
-    samtools view -b \$FILT -f 64 -F 3860 -o m2.bam ${bam}
-    samtools merge -f -@ ${task.cpus} minus_strand.bam m1.bam m2.bam
-
-    rm -f p1.bam p2.bam m1.bam m2.bam
-
-    for f in plus_strand.bam minus_strand.bam; do
-        if [ "\$(samtools view -c \$f)" -eq 0 ]; then
-            echo "ERROR: \$f has no reads -- check that the library really is" >&2
-            echo "       reverse-stranded (dUTP). For an unstranded library set" >&2
-            echo "       --rnaseq_strandedness unstranded, which skips this split." >&2
-            exit 1
-        fi
-    done
-    
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        samtools: "\$(samtools --version 2>&1 | head -1 | sed 's/samtools //' || echo unknown)"
-        container: "${task.container ?: 'conda'}"
-    END_VERSIONS
-    """
-
-    stub:
-    """
-    touch plus_strand.bam minus_strand.bam
-    echo "SPLIT_STRANDED_BAM stub completed"
-    
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        samtools: "stub"
-    END_VERSIONS
-    """
-}
-
-// ============================================================
 // Process: BRAKER4_RUN
 // Structural gene prediction with BRAKER4 (Snakemake re-implementation of BRAKER3)
 //
@@ -499,12 +423,12 @@ process MERGE_ANNOTATIONS {
     path rfam_family    // Rfam family.txt (per-family type), or a NO_ placeholder
 
     output:
-    path "${params.species_name}.v${params.annotation_version}.gff3", emit: gff3
+    path "${params.species_name}.v${params.version}.gff3", emit: gff3
     path "versions.yml", emit: versions
 
     script:
-    // Output names are derived from species_name and annotation_version.
-    def gff_out = "${params.species_name}.v${params.annotation_version}.gff3"
+    // Output names are derived from species_name and version.
+    def gff_out = "${params.species_name}.v${params.version}.gff3"
     def use_rfam = !ncrna_tblout.name.startsWith('NO_') && !rfam_family.name.startsWith('NO_')
     """
     # GTF -> GFF3. (agat_sp_convert_format.pl does not exist in AGAT;
@@ -561,7 +485,7 @@ process MERGE_ANNOTATIONS {
 
     stub:
     """
-    printf '##gff-version 3\\n' > ${params.species_name}.v${params.annotation_version}.gff3
+    printf '##gff-version 3\\n' > ${params.species_name}.v${params.version}.gff3
     echo "MERGE_ANNOTATIONS stub completed"
     
     cat <<-END_VERSIONS > versions.yml

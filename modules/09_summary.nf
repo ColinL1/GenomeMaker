@@ -84,26 +84,23 @@ process GENERATE_SUMMARY {
     else:
         lines.append("  no comparison JSON was staged")
 
-    # ---- polishing: which assembly is the final product ----
+    # ---- polishing gate and the final assembly ----
     lines.append("")
     lines.append("POLISHING / FINAL ASSEMBLY")
     lines.append("-" * 68)
-    decision = None
     if os.path.exists("polish_decision.txt"):
         decision = open("polish_decision.txt").read().strip()
-        lines.append(f"  Final assembly (polish QC gate): {decision.upper()}")
+        lines.append(f"  Polish QC gate: {decision} contigs carried forward")
     else:
-        lines.append("  polish QC gate did not run: the polished assembly is the final product")
-    final_stage = "final_unpolished" if decision == "unpolished" else "postpolish"
+        lines.append("  polish QC gate did not run")
     for stage, label in (("prepolish", "before polishing (gate input)"),
                          ("postpolish", "after polishing (gate input)"),
-                         ("final_unpolished", "unpolished, cleaned+sorted")):
+                         ("final", "final assembly")):
         for f in sorted(glob.glob(f"{stage}.*short_summary*.txt")):
             m = re.search(r"C:([\\d.]+)%\\[S:([\\d.]+)%,D:([\\d.]+)%\\],F:([\\d.]+)%,M:([\\d.]+)%",
                           open(f, errors="replace").read())
             if m:
-                tag = "   <-- FINAL PRODUCT" if stage == final_stage else ""
-                lines.append(f"  BUSCO {label:<30} C={m.group(1)}% D={m.group(3)}% M={m.group(5)}%{tag}")
+                lines.append(f"  BUSCO {label:<30} C={m.group(1)}% D={m.group(3)}% M={m.group(5)}%")
 
     # ---- BUSCO summaries actually present ----
     lines.append("")
@@ -214,7 +211,6 @@ process MULTIQC_CUSTOM_CONTENT {
     """
     mkdir -p mqc
     printf '# id: stub\\nA\\tB\\n' > mqc/stub_mqc.tsv
-    printf 'Metric\\tValue\\nProtein-coding genes\\t1\\n' > mqc/stage08_funannotate_mqc.tsv
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         python: "stub"
@@ -290,5 +286,185 @@ process MULTIQC_FINAL {
     "${task.process}":
         multiqc: "stub"
     END_VERSIONS
+    """
+}
+
+// Optional file input: '--flag path', or nothing for a NO_ placeholder
+def opt_flag(flag, f) {
+    return (f && !f.name.startsWith('NO_')) ? "${flag} ${f}" : ''
+}
+
+// ============================================================
+// Process: GENOME_SUMMARY
+// summary.tsv (bin/genome_summary.py): assembly, completeness, annotation, repeats and
+// mitogenome numbers, computed from the delivered files. Run on final/ (strategy 1) and, with
+// the release curation, on release_curation/ (that one is the MultiQC summary table then).
+// ============================================================
+process GENOME_SUMMARY {
+    label 'res_light'
+    tag   "genome_summary_${label}"
+
+    conda 'conda-forge::python=3.12'
+    container 'quay.io/biocontainers/python:3.12'
+    publishDir path: { "${params.outdir}/summary${params.release_folder_suffix}/${label}" }, mode: params.publish_mode
+
+    input:
+    val  label                                   // 'final' | 'release_curation'
+    path fasta,          stageAs: 'genome/*'
+    path anno,           stageAs: 'anno/*'       // funannotate output dir, or NO_ placeholder
+    path gff,            stageAs: 'gff/*'        // annotation GFF3 to count from (or NO_: anno's GFF3)
+    path compleasm,      stageAs: 'compleasm/*'
+    path busco,          stageAs: 'busco/*'
+    path qv,             stageAs: 'qv/*'
+    path repeat_tbl,     stageAs: 'repeats/*'
+    path hc_report,      stageAs: 'hc/*'
+    path mito_fasta,     stageAs: 'mito/*'
+    path mito_check,     stageAs: 'mitocheck/*'
+    path symbiont_busco, stageAs: 'symbiont/*'
+
+    output:
+    path "summary.tsv", emit: summary
+
+    script:
+    def has_anno = anno && !anno.name.startsWith('NO_')
+    def gff_arg  = (gff && !gff.name.startsWith('NO_')) ? "--gff ${gff}" : (has_anno ? '--gff "$(ls anno/*/annotate_results/*.gff3 | grep -v \'\\.hc\\.\' | head -1)"' : '')
+    def anno_args = has_anno
+        ? '--stats "$(ls anno/*/annotate_results/*.stats.json | head -1)" --annotations "$(ls anno/*/annotate_results/*.annotations.txt | head -1)"'
+        : ''
+    """
+    genome_summary.py --fasta ${fasta} ${gff_arg} ${anno_args} \\
+      ${opt_flag('--compleasm', compleasm)} ${opt_flag('--busco', busco)} ${opt_flag('--qv', qv)} \\
+      ${opt_flag('--repeat-tbl', repeat_tbl)} ${opt_flag('--hc-report', hc_report)} \\
+      ${opt_flag('--mito-fasta', mito_fasta)} ${opt_flag('--mito-check', mito_check)} \\
+      ${opt_flag('--symbiont-busco', symbiont_busco)} --funannotate-busco-db '${params.funannotate_busco_db}' \\
+      --n-chrom ${params.n_chromosome_scaffolds ?: 0} --out summary.tsv
+    """
+
+    stub:
+    """
+    printf 'section\\tmetric\\tvalue\\nAssembly\\tTotal length (bp)\\t1\\nAnnotation\\tProtein-coding genes\\t1\\n' > summary.tsv
+    """
+}
+
+// ============================================================
+// Process: METHODS
+// The methods text of the run (bin/methods.py): the template main.nf builds from the steps
+// that ran, filled with the recorded tool versions and the automatic decisions read from
+// the decision files. Shown at the bottom of the MultiQC report and written to qc/methods.md.
+// ============================================================
+process METHODS {
+    label 'res_light'
+    tag   "methods"
+
+    conda 'conda-forge::python=3.12'
+    container 'quay.io/biocontainers/python:3.12'
+    publishDir "${params.outdir}/summary${params.release_folder_suffix}", mode: params.publish_mode
+
+    input:
+    path template
+    path versions
+    path ranking,         stageAs: 'd/ranking/*'
+    path polish_report,   stageAs: 'd/polish_report/*'
+    path polish_decision, stageAs: 'd/polish_decision/*'
+    path purge_report,    stageAs: 'd/purge/*'
+    path mito_removed,    stageAs: 'd/mito/*'
+    path length_removed,  stageAs: 'd/length/*'
+    path screen_actions,  stageAs: 'd/screen/*'
+
+    output:
+    path "methods.md", emit: methods
+
+    script:
+    """
+    methods.py ${template} ${versions} methods.md --ranking ${ranking} --polish-report ${polish_report} \\
+      --polish-decision ${polish_decision} --purge-report ${purge_report} --mito-removed ${mito_removed} \\
+      --length-removed ${length_removed} --screen-actions ${screen_actions}
+    """
+
+    stub:
+    """
+    cp ${template} methods.md
+    """
+}
+
+// ============================================================
+// Process: FINAL_ASSEMBLE
+// <outdir>/final/: the automatic product, written in both strategies:
+//   genome/      final assembly (soft-masked when repeats ran), scaffold_name_map.tsv (with RagTag)
+//   annotation/  funannotate GFF3, proteins, CDS and mRNA transcripts, annotations.txt (stage 08)
+//   repeats/     repeats.gff3, RepeatMasker table, classified library
+//   mitogenome/  sequence and annotation (stage 05)
+//   symbiont/    the symbiont bin of the BlobToolKit split
+//   qc/          summary.tsv, methods.md and the decision files of the automatic gates
+//   multiqc_report.html
+// ============================================================
+process FINAL_ASSEMBLE {
+    label 'res_light'
+    tag   "final_assemble"
+
+    publishDir "${params.outdir}", mode: 'copy'
+
+    input:
+    path fasta,         stageAs: 'in/genome/assembly.fa'
+    path name_map,      stageAs: 'in/genome/map/*'
+    path anno,          stageAs: 'in/anno/*'
+    path repeat_files,  stageAs: 'in/repeats/*'
+    path mito_files,    stageAs: 'in/mito/*'
+    path symbiont,      stageAs: 'in/symbiont/*'
+    path qc_files,      stageAs: 'in/qc/*'
+    path report,        stageAs: 'in/report/*'
+
+    output:
+    path "final", emit: dir
+
+    script:
+    """
+    set -euo pipefail
+    mkdir -p final/{genome,qc}
+    cp -L in/genome/assembly.fa final/genome/${params.species_name}.fa
+    for f in in/genome/map/* in/qc/* in/repeats/* in/mito/* in/symbiont/*; do
+        [ -e "\$f" ] || continue
+        case \$(basename \$f) in NO_*) continue ;; esac
+        case \$f in
+            in/genome/map/*) cp -L \$f final/genome/ ;;
+            in/qc/*)         cp -L \$f final/qc/ ;;
+            in/repeats/*)    mkdir -p final/repeats    && cp -L \$f final/repeats/ ;;
+            in/mito/*)       mkdir -p final/mitogenome && cp -L \$f final/mitogenome/ ;;
+            in/symbiont/*)   mkdir -p final/symbiont   && cp -L \$f final/symbiont/symbiont_bin.fa ;;
+        esac
+    done
+    for d in in/anno/*; do
+        [ -d "\$d/annotate_results" ] || continue
+        mkdir -p final/annotation
+        for f in \$d/annotate_results/*.{gff3,proteins.fa,cds-transcripts.fa,mrna-transcripts.fa,annotations.txt}; do
+            if [ -e "\$f" ]; then cp -L \$f final/annotation/; fi
+        done
+    done
+    cp -L in/report/multiqc_report.html final/
+    """
+    // no stub: the script only copies files, so -stub runs check the folder layout
+}
+
+// ============================================================
+// Process: PUBLISH_MULTIQC
+// Copies the MultiQC report into the release-curation folder (<outdir>/release_curation/<name>/),
+// which is built before MultiQC runs.
+// ============================================================
+process PUBLISH_MULTIQC {
+    label 'res_light'
+    tag   "publish_multiqc"
+
+    publishDir "${params.outdir}/release_curation${params.release_folder_suffix}/${params.release_name}", mode: 'copy'
+
+    input:
+    path report, stageAs: 'in/*'
+    path release_dir         // the release-curation folder: copied only after it was built
+
+    output:
+    path "multiqc_report.html"
+
+    script:
+    """
+    cp -L in/multiqc_report.html multiqc_report.html
     """
 }

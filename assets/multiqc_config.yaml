@@ -12,20 +12,12 @@ title: "Coral Genome Assembly & Annotation"
 subtitle: "Integrated per-stage run report"
 intro_text: >
   Every stage of the pipeline reports here, in execution order: read QC, k-mer
-  genome sizing, per-assembler comparison and selection, duplicate purging,
-  contamination filtering, polishing (with a before/after regression gate),
-  repeats, structural and functional annotation. Sections absent from a given run
-  correspond to stages that were disabled or skipped.
-
-report_comment: >
-  Two caveats that the numbers alone do not convey. (1) BRAKER is run with
-  --busco_lineage, which uses compleasm to pick the TSEBRA mode that MAXIMISES
-  BUSCO -- so the annotation's BUSCO score is not an independent measure of
-  completeness. Use the OMArk section for that. (2) Large scaffolds are cut into
-  overlapping windows before the BLASTN/DIAMOND searches, which changes E-value
-  scaling and the per-query max_target_seqs cap; BlobTools ranks by bitscore,
-  which is length- and database-size independent, so taxonomic ordering is
-  unaffected.
+  genome sizing, assembler comparison and selection (or the supplied assembly),
+  mitochondrial contigs, polishing (with its QC gate), the BlobToolKit host/symbiont
+  split, duplicate purging (with its QC gate), contamination screens, scaffolding,
+  repeats, structural and functional annotation and, with the release curation, the
+  release QC. The run overview at the top lists the automatic decisions; the methods
+  are at the bottom. Sections absent from a given run belong to stages that were off.
 
 # ---- Read the pipeline's stages in order, not grouped by tool ----
 # module_order names the native MultiQC modules with their stage; the actual
@@ -48,13 +40,12 @@ module_order:
   - busco:
       name: "02-04 Assembly completeness: BUSCO (all stages)"
       info: >
-        BUSCO on the assembly at every stage: input, after purge_dups (purged), after
-        the taxonomic filter (filtered), before/after polishing, and the final
-        product. If the polish QC gate falls back to the unpolished assembly, its
-        BUSCO is the 'final_unpolished' sample (see "04 Polishing: QC gate").
+        BUSCO on the assembly at every checkpoint: per assembler (or the supplied
+        assembly), before/after polishing (the polish gate), after the taxonomic split
+        (filtered) and after purge_dups (purged; the purge gate), and the final assembly.
   - samtools:
       name: "03/05 Coverage: samtools"
-      info: "ONT alignment against the purged assembly (stage 03) and the mitogenome (stage 05)."
+      info: "ONT alignment against the contigs of the BlobToolKit split (stage 03) and the mitogenome (stage 05)."
   - star:
       name: "07 Structural: RNA-seq alignment (STAR)"
       info: "RNA-seq alignment rate -- the transcript evidence BRAKER's gene models rest on."
@@ -72,10 +63,12 @@ module_order:
 #    exactly that reason - don't "fix" them to match without re-testing.
 report_section_order:
   pipeline_summary:                   {order: 2000}
+  genome_summary:                     {order: 1990}
   fastqc:                             {order: 1000}
   nanostat:                           {order: 990}
   quast:                              {order: 900}
   stage02_gfastats:                   {order: 890}
+  stage02b_ranking:                   {order: 885}
   busco:                              {order: 880}
   stage03_filtering:                  {order: 800}
   # children of stage03_filtering: ascending = reading order
@@ -83,11 +76,13 @@ report_section_order:
   stage03_blobtools_plots:            {order: 2}
   stage03_blobtools_cumulative:       {order: 3}
   samtools:                           {order: 780}
+  purge_qc_gate:                      {order: 770}
   polish_qc_gate:                     {order: 700}
   stage04_polishing:                  {order: 700}
   stage04_merqury:                    {order: 690}
   stage05_mitogenome:                 {order: 650}
   # children of stage05_mitogenome: ascending = reading order
+  stage05_mito_removed:               {order: 0}
   stage05_mito_summary:               {order: 1}
   stage05_mito_gene_check:            {order: 2}
   stage05_mito_liftoff:               {order: 3}
@@ -114,9 +109,14 @@ report_section_order:
   stage07_gff3_validation:            {order: 13}
   stage08_functional:                 {order: 300}
   # children of stage08_functional: ascending = reading order
-  stage08_funannotate:                {order: 1}
-  stage08_phobius:                    {order: 2}
+  stage08_phobius:                    {order: 1}
+  stage10_release:                    {order: 250}
+  # children of stage10_release: ascending = reading order
+  stage10_release_qc:                 {order: 1}
+  stage10_table2asn:                  {order: 2}
+  stage10_discrepancies:              {order: 3}
   software_versions:                  {order: -1000}
+  methods:                            {order: -2000}
 
 # ---- File search patterns ----
 # The pipeline renames BUSCO summaries to <name>.<lineage>.short_summary.txt, which
@@ -139,9 +139,7 @@ extra_fn_clean_exts:
 
 # ---- Readable sample names -------------------------------------------------------
 # One label per entity wherever it appears (module tables and General Statistics).
-# BUSCO rows are stage-labelled; final_unpolished exists only when the polish QC
-# gate fell back, so its label is always correct. When the gate passes, the
-# polished assembly (postpolish) is the final product (see Pipeline summary).
+# BUSCO rows are stage-labelled; 'final' is the delivered assembly.
 sample_names_replace_regex: true
 sample_names_replace:
   "^Por_GA_15_allrun$": "ONT reads raw"
@@ -149,14 +147,14 @@ sample_names_replace:
   "^ONT_raw\\.NanoStats$": "ONT reads raw"
   "^ONT_trimmed\\.NanoStats$": "ONT reads trimmed (porechop)"
   "^ONT_trimmed\\.NanoStats_post_filtering$": "ONT reads trimmed + NanoPlot filter"
-  "^coverage$": "ONT reads vs purged assembly"
+  "^coverage$": "ONT reads vs contigs (BlobToolKit input)"
   "^mito_(flagstat|coverage)$": "ONT reads vs mitogenome"
   "^input_assembly\\.anthozoa_odb12$": "02 input assembly"
-  "^purged\\.anthozoa_odb12$": "03 purged (purge_dups)"
-  "^filtered\\.anthozoa_odb12$": "03 filtered (taxonomic filter)"
-  "^prepolish\\.anthozoa_odb12$": "04 pre-polish (= filtered; gate input)"
-  "^postpolish\\.anthozoa_odb12$": "04 post-polish (medaka; final only if gate PASS)"
-  "^final_unpolished\\.anthozoa_odb12$": "FINAL ASSEMBLY (unpolished; polish gate fallback)"
+  "^prepolish\\.anthozoa_odb12$": "04 pre-polish (polish gate input)"
+  "^postpolish\\.anthozoa_odb12$": "04 post-polish (Medaka; polish gate output)"
+  "^filtered\\.anthozoa_odb12$": "03 host bin (BlobToolKit split)"
+  "^purged\\.anthozoa_odb12$": "03b purged (purge_dups)"
+  "^final\\.anthozoa_odb12$": "FINAL ASSEMBLY"
   # RNA-seq libraries: "20230326_Por_GT_28_15_RNA-Seq_QCVTS..." -> "RNA-seq GT_28_15"
   "^\\d+_Por_([A-Z]+_\\d+_\\d+)_RNA-Seq_.*$": "RNA-seq \\1"
 
@@ -215,11 +213,13 @@ table_cond_formatting_rules:
     pass: [{lt: 5}]
     warn: [{gt: 5}]
     fail: [{gt: 10}]
-  verdict:                        # polish QC gate
+  verdict:                        # polish and purge QC gates
     pass: [{s_eq: "PASS"}]
+    warn: [{s_eq: "WARN"}]
     fail: [{s_eq: "FAIL"}, {s_eq: "UNPARSED"}]
-  "Gate status":                  # pipeline summary
+  "Gate status":                  # run overview
     pass: [{s_eq: "PASS"}]
+    warn: [{s_eq: "WARN"}]
     fail: [{s_eq: "FAIL"}, {s_eq: "UNPARSED"}]
   "Status":                       # stage07_star_qc_flag
     pass: [{s_eq: "PASS"}]
@@ -235,9 +235,10 @@ section_comments:
   fastqc: "Diagnostic only for long reads; does not gate anything."
   nanostat: "Read length/quality of the ONT data that every assembler and the polishing step consume."
   quast: "Contiguity per assembler; feeds the assembler ranking (multi-assembler mode)."
-  busco: "Completeness at every stage; the pre/post-polish pair feeds the polish QC gate."
-  samtools: "ONT read support for the purged assembly (stage 03) and the mitogenome (stage 05)."
-  polish_qc_gate: "Decides whether the polished or the unpolished assembly continues to annotation."
+  busco: "Completeness at every stage; the pre/post-polish pair feeds the polish QC gate, the filtered/purged pair the purge QC gate."
+  samtools: "ONT read support for the contigs of the BlobToolKit split (stage 03) and the mitogenome (stage 05)."
+  polish_qc_gate: "Decides whether the polished or the unpolished contigs go on."
+  purge_qc_gate: "Stops the run when purge_dups removed BUSCO genes beyond the tolerance."
   star: "RNA-seq evidence for BRAKER; low rates mean gene models lean on protein evidence."
 
 # ---- Exports: full underlying data, not just the rendered view -------------------

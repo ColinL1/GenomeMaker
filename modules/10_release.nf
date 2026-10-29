@@ -1,12 +1,11 @@
 // ============================================================
 // 10_release.nf
-// NCBI-ready release, built from the pipeline's own outputs:
+// Release curation: the NCBI-ready release, built from the pipeline's own outputs:
 //   product curation -> funannotate NCBI pass -> .tbl fixes -> table2asn (+ mitogenome)
-//   AGP, scaffold name map, repeat files, high-confidence subset, symbiont BUSCO,
-//   summary + README, release QC checks, release folder.
-// Scripts: bin/curate_products.py, make_fix_files.py, fix_tbl.py, mito_tbl.py, scaffold_name_map.py,
-// drop_loci.py, sync_release_files.py, release_sets.py, release_summary.py, release_report.py,
-// release_methods.py, multiqc_custom_content.py, annotation_qc_gate.py.
+//   repeat files, high-confidence subset, symbiont BUSCO, summary.tsv, release QC checks,
+//   release folder <outdir>/release_curation/<release_name>/.
+// Scripts: bin/curate_products.py, make_fix_files.py, fix_tbl.py, mito_tbl.py, drop_loci.py,
+// sync_release_files.py, release_sets.py, genome_summary.py, annotation_qc_gate.py.
 // The released sequence is the final masked assembly as it is: nothing edits it after annotation.
 // ============================================================
 
@@ -46,7 +45,7 @@ process CURATE_PRODUCTS {
 
     conda 'conda-forge::python=3.12'
     container 'quay.io/biocontainers/python:3.12'
-    publishDir path: { "${params.outdir}/10_release${params.release_folder_suffix}/product_curation" + (pass == 'final' ? '' : "/${pass}") }, mode: params.publish_mode,
+    publishDir path: { "${params.outdir}/10_release_curation${params.release_folder_suffix}/product_curation" + (pass == 'final' ? '' : "/${pass}") }, mode: params.publish_mode,
                pattern: '{product_curation.tsv,uniprot_cache.json}'
 
     input:
@@ -97,7 +96,7 @@ process MAKE_FIX_FILES {
 
     conda 'bioconda::funannotate=1.8.17'
     container 'quay.io/biocontainers/funannotate:1.8.17--pyhdfd78af_5'
-    publishDir "${params.outdir}/10_release${params.release_folder_suffix}/product_curation", mode: params.publish_mode
+    publishDir "${params.outdir}/10_release_curation${params.release_folder_suffix}/product_curation", mode: params.publish_mode
 
     input:
     path refined_gff
@@ -129,7 +128,7 @@ process FUNANNOTATE_NCBI {
 
     conda 'bioconda::funannotate=1.8.17'
     container 'quay.io/biocontainers/funannotate:1.8.17--pyhdfd78af_5'
-    publishDir "${params.outdir}/10_release${params.release_folder_suffix}/funannotate_ncbi", mode: params.publish_mode
+    publishDir "${params.outdir}/10_release_curation${params.release_folder_suffix}/funannotate_ncbi", mode: params.publish_mode
 
     input:
     path gff
@@ -167,7 +166,7 @@ process FUNANNOTATE_NCBI {
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        funannotate: "\$(funannotate --version 2>&1 | sed 's/funannotate v//' || echo unknown)"
+        funannotate: "\$(funannotate --version 2>&1 | grep -m1 '^funannotate v' | sed 's/funannotate v//' || echo unknown)"
     END_VERSIONS
     """
 
@@ -190,7 +189,7 @@ process FIX_TBL {
 
     conda 'conda-forge::python=3.12'
     container 'quay.io/biocontainers/python:3.12'
-    publishDir path: { "${params.outdir}/10_release${params.release_folder_suffix}/table2asn" + (pass == 'final' ? '' : "/${pass}") }, mode: params.publish_mode, pattern: '*.tsv'
+    publishDir path: { "${params.outdir}/10_release_curation${params.release_folder_suffix}/table2asn" + (pass == 'final' ? '' : "/${pass}") }, mode: params.publish_mode, pattern: '*.tsv'
 
     input:
     val  pass                                      // 'preflight' or 'final'
@@ -234,7 +233,7 @@ process MITO_TBL {
 
     conda 'conda-forge::python=3.12'
     container 'quay.io/biocontainers/python:3.12'
-    publishDir "${params.outdir}/10_release${params.release_folder_suffix}/table2asn/mitogenome", mode: params.publish_mode
+    publishDir "${params.outdir}/10_release_curation${params.release_folder_suffix}/table2asn/mitogenome", mode: params.publish_mode
 
     input:
     path mito_fasta
@@ -263,7 +262,7 @@ process TABLE2ASN {
     label 'res_mid_4h'
     tag   "table2asn_${pass}"
 
-    publishDir path: { "${params.outdir}/10_release${params.release_folder_suffix}/table2asn" + (pass == 'final' ? '' : "/${pass}") }, mode: params.publish_mode
+    publishDir path: { "${params.outdir}/10_release_curation${params.release_folder_suffix}/table2asn" + (pass == 'final' ? '' : "/${pass}") }, mode: params.publish_mode
 
     input:
     val  pass                             // 'preflight' or 'final'
@@ -326,34 +325,6 @@ process TABLE2ASN {
     """
 }
 
-// Final scaffold names -> names before renaming (by sequence MD5; FUNANNOTATE_SORT only renames).
-// After RagTag these are the reference-chromosome-based names (<ref>_RagTag) or the contig names.
-process SCAFFOLD_NAME_MAP {
-    label 'res_light'
-    tag   "scaffold_name_map"
-
-    conda 'conda-forge::python=3.12'
-    container 'quay.io/biocontainers/python:3.12'
-    publishDir "${params.outdir}/10_release${params.release_folder_suffix}/scaffold_names", mode: params.publish_mode
-
-    input:
-    path presort, stageAs: 'presort/*'
-    path final_fasta, stageAs: 'final/*'
-
-    output:
-    path "scaffold_name_map.tsv", emit: map
-
-    script:
-    """
-    scaffold_name_map.py ${presort} ${final_fasta} scaffold_name_map.tsv
-    """
-
-    stub:
-    """
-    touch scaffold_name_map.tsv
-    """
-}
-
 // The release annotation files, made to agree with the submission: rRNA fragments FIX_TBL removed are
 // removed, then GFF3 and annotations.txt take gene spans, symbols, products and EC numbers from the
 // final .tbl (sync_release_files.py), and the .gbk is table2asn's GenBank flatfile of the .sqn.
@@ -363,7 +334,7 @@ process RELEASE_SETS {
 
     conda 'conda-forge::python=3.12'
     container 'quay.io/biocontainers/python:3.12'
-    publishDir "${params.outdir}/10_release${params.release_folder_suffix}/sets", mode: params.publish_mode
+    publishDir "${params.outdir}/10_release_curation${params.release_folder_suffix}/sets", mode: params.publish_mode
 
     input:
     path anno
@@ -398,7 +369,7 @@ process RELEASE_SETS {
     stub:
     """
     mkdir -p sets
-    touch sets/stub.gff3 sets/stub.hc.gff3 sets/id_map.tsv sets/release_sets_report.tsv sync_release_files.tsv
+    touch sets/stub.gff3 sets/stub.hc.gff3 sets/stub.annotations.txt sets/stub.gbk sets/id_map.tsv sets/release_sets_report.tsv sync_release_files.tsv
     """
 }
 
@@ -409,7 +380,7 @@ process SYMBIONT_BUSCO {
 
     conda 'bioconda::busco=6.1.0'
     container 'quay.io/biocontainers/busco:6.1.0--pyhdfd78af_1'
-    publishDir "${params.outdir}/10_release${params.release_folder_suffix}/symbiont_busco", mode: params.publish_mode, pattern: 'short_summary*'
+    publishDir "${params.outdir}/10_release_curation${params.release_folder_suffix}/symbiont_busco", mode: params.publish_mode, pattern: 'short_summary*'
 
     input:
     path fasta
@@ -448,110 +419,6 @@ process SYMBIONT_BUSCO {
     """
 }
 
-// Methods section of the README: the template from the RELEASE subworkflow (steps and settings of this
-// run) with the tool versions the run's processes recorded in their versions.yml.
-process RELEASE_METHODS {
-    label 'res_light'
-    tag   "release_methods"
-
-    conda 'conda-forge::python=3.12'
-    container 'quay.io/biocontainers/python:3.12'
-
-    input:
-    path template, stageAs: 'methods_template.md'
-    path versions, stageAs: 'all_versions.yml'
-
-    output:
-    path "methods.md", emit: methods
-
-    script:
-    """
-    release_methods.py methods_template.md all_versions.yml methods.md
-    """
-
-    stub:
-    """
-    cp methods_template.md methods.md
-    """
-}
-
-// summary.tsv and README.md: one protein-coding number everywhere.
-process RELEASE_REPORT {
-    label 'res_light'
-    tag   "release_report"
-
-    conda 'conda-forge::python=3.12'
-    container 'quay.io/biocontainers/python:3.12'
-    publishDir "${params.outdir}/10_release${params.release_folder_suffix}/report", mode: params.publish_mode
-
-    input:
-    path anno
-    path release_gff, stageAs: 'rel/*'
-    path symbiont_busco, stageAs: 'symbiont/*'   // one short_summary .txt, or NO_ placeholder
-    path fasta
-    path busco_summary, stageAs: 'busco/*'
-    path merqury_qv, stageAs: 'qv/*'
-    path repeat_tbl
-    path sets_report
-    path mito_fasta, stageAs: 'mito/*'
-    path mito_check, stageAs: 'mitocheck/*'
-    path notes, stageAs: 'notes/*'
-    path methods
-
-    output:
-    path "README.md",   emit: readme
-    path "summary.tsv", emit: summary
-
-    script:
-    """
-    base=\$(basename ${anno}/annotate_results/*.stats.json .stats.json)
-    release_summary.py --fasta ${fasta} --gff ${release_gff} --stats ${anno}/annotate_results/\$base.stats.json \\
-      --annotations ${anno}/annotate_results/\$base.annotations.txt ${opt_arg('--busco', busco_summary)} ${opt_arg('--qv', merqury_qv)} \\
-      --repeat-tbl ${repeat_tbl} --hc-report ${sets_report} ${opt_arg('--mito-fasta', mito_fasta)} ${opt_arg('--mito-check', mito_check)} \\
-      ${opt_arg('--symbiont-busco', symbiont_busco)} --funannotate-busco-db '${params.funannotate_busco_db}' \\
-      --n-chrom ${params.n_chromosome_scaffolds ?: 0} --out summary.tsv
-    release_report.py --stats ${anno}/annotate_results/\$base.stats.json --release-gff ${release_gff} \\
-      --species '${params.ncbi_species}' --version '${params.release_version}' --isolate '${params.ncbi_isolate ?: ''}' \\
-      --prefix \$base --outdir . --summary summary.tsv --methods ${methods} ${opt_arg('--notes', notes)}
-    """
-
-    stub:
-    """
-    echo 'Protein-coding genes 1' > README.md
-    printf 'section\\tmetric\\tvalue\\nAnnotation\\tProtein-coding genes\\t1\\n' > summary.tsv
-    """
-}
-
-// The funannotate summary table of the MultiQC report, made from the release's own files, so the
-// QC gate can check that MultiQC reports the same protein-coding number.
-process RELEASE_MQC_TABLE {
-    label 'res_light'
-    tag   "release_mqc_table"
-
-    conda 'conda-forge::python=3.12'
-    container 'quay.io/biocontainers/python:3.12'
-
-    input:
-    path anno
-
-    output:
-    path "mqc/stage08_funannotate_mqc.tsv", emit: table
-
-    script:
-    """
-    mkdir -p in/annotate_results
-    for f in ${anno}/annotate_results/*.stats.json ${anno}/annotate_results/*.gff3; do ln -s \$(readlink -f \$f) in/annotate_results/; done
-    MQC_REFINED_UPSTREAM=1 multiqc_custom_content.py in mqc
-    test -s mqc/stage08_funannotate_mqc.tsv
-    """
-
-    stub:
-    """
-    mkdir -p mqc
-    printf 'Metric\\tValue\\nProtein-coding genes\\t1\\n' > mqc/stage08_funannotate_mqc.tsv
-    """
-}
-
 // Release QC checks (bin/annotation_qc_gate.py). Any FAIL stops the run.
 process ANNOTATION_QC_GATE {
     label 'res_mid_4h'
@@ -559,7 +426,7 @@ process ANNOTATION_QC_GATE {
 
     conda 'conda-forge::python=3.12'
     container 'quay.io/biocontainers/python:3.12'
-    publishDir "${params.outdir}/10_release${params.release_folder_suffix}/qc", mode: params.publish_mode
+    publishDir "${params.outdir}/10_release_curation${params.release_folder_suffix}/qc", mode: params.publish_mode
 
     input:
     path release_gff,      stageAs: 'g/release.gff3'
@@ -573,10 +440,10 @@ process ANNOTATION_QC_GATE {
     path gt_reports,       stageAs: 'g/gt/*'
     path stats_json,       stageAs: 'g/final.stats.json'
     path summary_tsv,      stageAs: 'g/summary.tsv'
-    path readme,           stageAs: 'g/README.md'
-    path mqc_summary,      stageAs: 'g/pipeline_summary_mqc.tsv'
-    path name_map,         stageAs: 'g/scaffold_name_map.tsv'
+    path name_map,         stageAs: 'g/map/*'      // scaffold_name_map.tsv with RagTag, else NO_ placeholder
+    path agp,              stageAs: 'g/agp/*'      // RagTag AGP, else NO_ placeholder
     path fasta,            stageAs: 'g/scaffolds.fa'
+    path contigs,          stageAs: 'g/contigs/*'  // the contigs that entered scaffolding (after the screens)
     path repeat_lib,       stageAs: 'g/repeats_classified.lib'
     path relabel_report,   stageAs: 'g/relabel_report.tsv'
     path screen_files,     stageAs: 'g/screen/*'   // screen_actions.tsv, screen_review.tsv (or NO_ placeholder)
@@ -593,14 +460,18 @@ process ANNOTATION_QC_GATE {
                params.qc_chrom_prefix ? "--chrom-prefix '${params.qc_chrom_prefix}'" : '',
                params.qc_expected_lineage ? "--expected-lineage '${params.qc_expected_lineage}'" : '',
                params.qc_expected_division ? "--expected-division '${params.qc_expected_division}'" : ''].findAll().join(' ')
+    def has_map = !name_map.name.startsWith('NO_')
+    def scaffold_args = has_map
+        ? "--name-map ${name_map} --agp ${agp} --gap-evidence ${linkage_evidence().replace('-', '_')} " +
+          "--gap-length ${params.ragtag_infer_gaps.toString().toBoolean() ? 0 : 100}"
+        : ''
     """
     gts=\$(for f in g/gt/*; do printf -- '--gt-report %s ' \$f; done)
     annotation_qc_gate.py --release-gff g/release.gff3 --refined-gff g/refined.gff3 --refine-report g/refine_report.tsv \\
       --protein-identity g/protein_identity.tsv --release-sets-report g/release_sets_report.tsv \\
       --final-proteins g/final.proteins.fa --refined-proteins g/refined.proteins.faa --id-map g/id_map.tsv \\
-      \$gts --stats-json g/final.stats.json --summary-tsv g/summary.tsv --readme g/README.md \\
-      --multiqc-tsv g/pipeline_summary_mqc.tsv --name-map g/scaffold_name_map.tsv \\
-      --fasta g/scaffolds.fa --repeat-lib g/repeats_classified.lib --relabel-report g/relabel_report.tsv \\
+      \$gts --stats-json g/final.stats.json --summary-tsv g/summary.tsv ${scaffold_args} \\
+      --fasta g/scaffolds.fa --contigs ${contigs} --repeat-lib g/repeats_classified.lib --relabel-report g/relabel_report.tsv \\
       --screen-actions g/screen/screen_actions.tsv --screen-review g/screen/screen_review.tsv --val-dir g/ncbi \\
       --sbt ${sbt} --locus-tag '${params.locus_tag}' ${ncbi} ${chk} \\
       ${params.run_screens.toString().toBoolean() ? '' : '--screens-not-run'} --out annotation_qc.tsv
@@ -612,25 +483,24 @@ process ANNOTATION_QC_GATE {
     """
 }
 
-// The release folder: <outdir>/release/<release_name>/ with genome/, annotation/, repeats/,
-// ncbi/, mitogenome/, qc/, README.md, summary.tsv.
+// The release folder: <outdir>/release_curation/<release_name>/ with genome/, annotation/, repeats/,
+// ncbi/, mitogenome/, qc/ (summary.tsv among the QC files). PUBLISH_MULTIQC adds the MultiQC report.
 process RELEASE_ASSEMBLE {
     label 'res_light'
     tag   "release_assemble"
 
-    publishDir "${params.outdir}/release${params.release_folder_suffix}", mode: 'copy'
+    publishDir "${params.outdir}/release_curation${params.release_folder_suffix}", mode: 'copy'
 
     input:
     path qc_gate,       stageAs: 'in/gate/*'   // ANNOTATION_QC_GATE result: the folder is built only after the gate passed
     path fasta,         stageAs: 'in/genome/scaffolds.fa'
-    path name_map,      stageAs: 'in/genome/scaffold_name_map.tsv'
+    path name_map,      stageAs: 'in/genome/map/*'   // with RagTag; else NO_ placeholder
     path anno,          stageAs: 'in/anno'
     path sets,          stageAs: 'in/sets/*'
     path repeat_files,  stageAs: 'in/repeats/*'
     path ncbi_files,    stageAs: 'in/ncbi/*'
     path mito_files,    stageAs: 'in/mito/*'
     path qc_files,      stageAs: 'in/qc/*'
-    path report_files,  stageAs: 'in/report/*'
 
     output:
     path "${params.release_name}", emit: dir
@@ -642,7 +512,7 @@ process RELEASE_ASSEMBLE {
     mkdir -p ${D}/{genome,annotation/extra,repeats,ncbi,mitogenome,qc}
     base=\$(basename in/anno/annotate_results/*.proteins.fa .proteins.fa)
     cp -L in/genome/scaffolds.fa ${D}/genome/\$base.scaffolds.fa
-    cp -L in/genome/scaffold_name_map.tsv ${D}/genome/
+    for f in in/genome/map/*; do case \$(basename \$f) in NO_*) ;; *) cp -L \$f ${D}/genome/ ;; esac; done
     cp -L in/sets/\$base.gff3 ${D}/annotation/
     for x in proteins.fa cds-transcripts.fa mrna-transcripts.fa; do
         cp -L in/anno/annotate_results/\$base.\$x ${D}/annotation/
@@ -658,11 +528,7 @@ process RELEASE_ASSEMBLE {
         case \$(basename \$f) in NO_*) continue ;; esac
         case \$f in in/mito/*) cp -L \$f ${D}/mitogenome/ ;; *) cp -L \$f ${D}/qc/ ;; esac
     done
-    cp -L in/report/README.md in/report/summary.tsv ${D}/
     """
 
-    stub:
-    """
-    mkdir -p ${params.release_name}
-    """
+    // no stub: the script only copies files, so -stub runs check the folder layout
 }

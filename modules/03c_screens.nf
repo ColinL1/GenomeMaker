@@ -135,7 +135,7 @@ process FCS_GX {
     apptainer exec ${fcs_binds([fasta, image])} -B \$(readlink -f ${gxdb}) \\
       --env NCBI_FCS_REPORT_ANALYTICS=0 --env GX_NUM_CORES=${task.cpus} \$(readlink -f ${image}) \\
       run_gx --fasta \$(readlink -f ${fasta}) --out-dir \$PWD --gx-db \$(readlink -f ${gxdb})/all \\
-      --tax-id ${params.fcs_tax_id} > gx.log 2>&1
+      --tax-id ${params.taxon_id} > gx.log 2>&1
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -146,7 +146,7 @@ process FCS_GX {
 
     stub:
     """
-    printf '#seq_id\\tstart_pos\\tend_pos\\tseq_len\\taction\\tdiv\\tagg_cont_cov\\ttop_tax_name\\n' > ${sname}.${params.fcs_tax_id}.fcs_gx_report.txt
+    printf '#seq_id\\tstart_pos\\tend_pos\\tseq_len\\taction\\tdiv\\tagg_cont_cov\\ttop_tax_name\\n' > ${sname}.${params.taxon_id}.fcs_gx_report.txt
     touch ${sname}.taxonomy.rpt
     printf '"${task.process}":\\n    fcs-gx: stub\\n' > versions.yml
     """
