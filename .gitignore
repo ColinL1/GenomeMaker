@@ -5,3 +5,9 @@ temp_ignore
 work
 NECAT
 results*
+__pycache__/
+config
+.braker4
+.conda_envs
+conf/porites.config
+conf/porites_release_notes.md
