@@ -24,4 +24,5 @@ workflow PURGE_DUPS {
         purged_assembly = PURGE_DUPS_RUN.out.purged_assembly
         haplotigs       = PURGE_DUPS_RUN.out.haplotigs
         dups_bed        = PURGE_DUPS_RUN.out.dups_bed
+        versions        = PURGE_DUPS_COVERAGE.out.versions.mix(PURGE_DUPS_RUN.out.versions)
 }

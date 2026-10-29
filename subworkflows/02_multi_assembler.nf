@@ -15,6 +15,9 @@ workflow MULTI_ASSEMBLER {
         necat_read_list
         genome_size
         busco_lineage         // single lineage, e.g. anthozoa_odb12
+        necat_bin_dir
+        busco_db_dir
+        combine_comparison_script
 
     main:
         def assemblers_list = params.assemblers instanceof List
@@ -22,25 +25,32 @@ workflow MULTI_ASSEMBLER {
             : params.assemblers.split(',').collect { a -> a.trim() }
 
         def assembler_channels = []
+        def versions_ch = channel.empty()
 
         if ('necat' in assemblers_list) {
             if (!params.necat_config || !file(params.necat_config).exists())
                 error "Assembler 'necat' requested but params.necat_config not found: ${params.necat_config}"
             if (!params.necat_read_list || !file(params.necat_read_list).exists())
                 error "Assembler 'necat' requested but params.necat_read_list not found: ${params.necat_read_list}"
-            ASSEMBLE_NECAT(assembly_reads, necat_config, necat_read_list)
+            if (!params.necat_path_bin || !file(params.necat_path_bin).exists())
+                error "Assembler 'necat' requested but params.necat_path_bin not found: ${params.necat_path_bin}"
+            ASSEMBLE_NECAT(assembly_reads, necat_config, necat_read_list, necat_bin_dir)
+            versions_ch = versions_ch.mix(ASSEMBLE_NECAT.out.versions)
             assembler_channels << ASSEMBLE_NECAT.out.assembly.map { p -> ['necat', p] }
         }
         if ('flye' in assemblers_list) {
             ASSEMBLE_FLYE(assembly_reads, genome_size)
+            versions_ch = versions_ch.mix(ASSEMBLE_FLYE.out.versions)
             assembler_channels << ASSEMBLE_FLYE.out.assembly.map { p -> ['flye', p] }
         }
         if ('hifiasm' in assemblers_list) {
             ASSEMBLE_HIFIASM(assembly_reads, genome_size)
+            versions_ch = versions_ch.mix(ASSEMBLE_HIFIASM.out.versions)
             assembler_channels << ASSEMBLE_HIFIASM.out.assembly.map { p -> ['hifiasm', p] }
         }
         if ('raven' in assemblers_list) {
             ASSEMBLE_RAVEN(assembly_reads)
+            versions_ch = versions_ch.mix(ASSEMBLE_RAVEN.out.versions)
             assembler_channels << ASSEMBLE_RAVEN.out.assembly.map { p -> ['raven', p] }
         }
 
@@ -49,7 +59,7 @@ workflow MULTI_ASSEMBLER {
 
         def assemblies_ch = assembler_channels.inject { acc, ch -> acc.mix(ch) }
 
-        BUSCO_ASSEMBLY(assemblies_ch, channel.value(busco_lineage))
+        BUSCO_ASSEMBLY(assemblies_ch, channel.value(busco_lineage), busco_db_dir)
 
         GFASTATS_QC(assemblies_ch)
         QUAST_QC(assemblies_ch)
@@ -57,7 +67,8 @@ workflow MULTI_ASSEMBLER {
         // Aggregation: name-embedded filenames make plain path lists safe here.
         COMBINE_COMPARISON(
             GFASTATS_QC.out.gfastats_report.map { name, p -> p }.collect(),
-            BUSCO_ASSEMBLY.out.busco_summary.map { name, p -> p }.collect()
+            BUSCO_ASSEMBLY.out.busco_summary.map { name, p -> p }.collect(),
+            combine_comparison_script
         )
 
     emit:
@@ -68,4 +79,7 @@ workflow MULTI_ASSEMBLER {
         quast_reports      = QUAST_QC.out.quast_report              // (name, path)
         comparison         = COMBINE_COMPARISON.out.comparison_tsv
         comparison_json    = COMBINE_COMPARISON.out.comparison_json
+        versions           = versions_ch.mix(
+            BUSCO_ASSEMBLY.out.versions, GFASTATS_QC.out.versions,
+            QUAST_QC.out.versions, COMBINE_COMPARISON.out.versions)
 }

@@ -8,11 +8,6 @@ nextflow.enable.dsl = 2
 
 process RANK_ASSEMBLIES {
     tag "rank_assemblies"
-    cpus  { 2 * task.attempt }
-    memory { 4.GB * task.attempt }
-    time   { 30.min * task.attempt }
-    errorStrategy 'retry'
-    maxRetries params.max_retries
 
     conda 'conda-forge::python'
     container 'quay.io/biocontainers/python:3.12'
@@ -21,14 +16,32 @@ process RANK_ASSEMBLIES {
     input:
     path gfastats_reports    // ${name}.gfastats.txt  (name-embedded filenames)
     path busco_summaries     // ${name}.${lineage}.short_summary.txt, HOST lineage only
+    path quast_reports       // ${name}_quast_report/ dirs -- QUAST was previously computed and then unused
+    path rank_script
+    val  expected_genome_size
 
     output:
-    path "best_assembler.txt", emit: best_name
+    path "best_assembler.txt",   emit: best_name
     path "assembly_ranking.tsv", emit: ranking_table
+    path "versions.yml", emit: versions
 
     script:
+    // EXPECTED_GENOME_SIZE lets the ranking reject an assembly whose total length
+    // is wildly off the GenomeScope2 estimate -- a doubled assembly can score well
+    // on BUSCO completeness while being badly wrong. Empty/0 disables the check.
+    def expected = (expected_genome_size ?: 0)
     """
-    python3 ${params.bin_path}rank.py
+    PYTHON=\$(command -v python3 || command -v python) || { echo "ERROR: no python interpreter found" >&2; exit 1; }
+    export EXPECTED_GENOME_SIZE='${expected}'
+    export SIZE_TOLERANCE='${params.assembly_size_tolerance}'
+    export BUSCO_TIE_BAND='${params.busco_tie_band}'
+    \$PYTHON ${rank_script}
+    
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: "\$(python3 --version 2>&1 | sed 's/Python //' || echo unknown)"
+        container: "${task.container ?: 'conda'}"
+    END_VERSIONS
     """
 
     stub:
@@ -36,5 +49,10 @@ process RANK_ASSEMBLIES {
     echo "flye" > best_assembler.txt
     touch assembly_ranking.tsv
     echo "RANK_ASSEMBLIES stub completed"
+    
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: "stub"
+    END_VERSIONS
     """
 }
