@@ -3,7 +3,7 @@
 // NCBI-ready release, built from the pipeline's own outputs:
 //   product curation -> funannotate NCBI pass -> .tbl fixes -> table2asn (+ mitogenome)
 //   AGP, scaffold name map, repeat files, high-confidence subset, symbiont BUSCO,
-//   summary + README, QC gate G1-G11, release folder.
+//   summary + README, release QC checks, release folder.
 // Scripts: bin/curate_products.py, make_fix_files.py, fix_tbl.py, mito_tbl.py, scaffold_name_map.py,
 // drop_loci.py, sync_release_files.py, release_sets.py, release_summary.py, release_report.py,
 // release_methods.py, multiqc_custom_content.py, annotation_qc_gate.py.
@@ -475,7 +475,7 @@ process RELEASE_METHODS {
     """
 }
 
-// summary.tsv and README.md: one protein-coding number everywhere (WP7).
+// summary.tsv and README.md: one protein-coding number everywhere.
 process RELEASE_REPORT {
     label 'res_light'
     tag   "release_report"
@@ -523,7 +523,7 @@ process RELEASE_REPORT {
 }
 
 // The funannotate summary table of the MultiQC report, made from the release's own files, so the
-// QC gate can check that MultiQC reports the same protein-coding number (G6).
+// QC gate can check that MultiQC reports the same protein-coding number.
 process RELEASE_MQC_TABLE {
     label 'res_light'
     tag   "release_mqc_table"
@@ -552,7 +552,7 @@ process RELEASE_MQC_TABLE {
     """
 }
 
-// Checks G1-G11 (master plan section 9.3). Any FAIL stops the run.
+// Release QC checks (bin/annotation_qc_gate.py). Any FAIL stops the run.
 process ANNOTATION_QC_GATE {
     label 'res_mid_4h'
     tag   "qc_gate"

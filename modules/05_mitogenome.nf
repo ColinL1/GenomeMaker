@@ -228,7 +228,7 @@ SeqIO.write(r, 'mito_ref.gb', 'genbank')
 }
 
 // ============================================================
-// Mitogenome, final product (added 2026-10-04)
+// Mitogenome, final product
 //
 // Two routes to the sequence, chosen by whether Illumina shotgun DNA of the
 // same individual is supplied (params.illumina_dna_r1/_r2):

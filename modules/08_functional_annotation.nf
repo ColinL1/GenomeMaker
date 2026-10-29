@@ -197,14 +197,7 @@ process EGGNOG_MAPPER {
     path "versions.yml", emit: versions
 
     script:
-    // --data_dir must point at the eggNOG database, not the funannotate one --
-    // it was previously handed params.funannotate_db, a different database
-    // entirely, so emapper either failed to find its data or silently searched
-    // the wrong thing.
-    //
-    // `--no_egeny` was not a valid emapper flag (no such option in 2.1.x) and has
-    // been dropped. Annotation is the point of running this, so there is nothing
-    // here that should be suppressed.
+    // --data_dir must point at the eggNOG database, not the funannotate one.
     """
     emapper.py \\
       --cpu ${task.cpus} \\

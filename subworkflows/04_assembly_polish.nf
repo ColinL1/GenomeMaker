@@ -2,12 +2,10 @@
 // 04_assembly_polish.nf
 // Assembly polishing: Medaka → funannotate clean/sort → QC + gate
 //
-// Racon was removed (see modules/04_assembly_polish.nf for the reasoning).
+// No Racon pre-step (see modules/04_assembly_polish.nf for the reasoning).
 //
-// The QC block is the point of this stage's rework: previously BUSCO ran ONCE,
-// after the whole chain, so a polishing step that made the consensus worse was
-// indistinguishable from one that helped. Now every metric is measured
-// before AND after, and POLISH_QC_GATE fails the run on a regression.
+// Every metric is measured before AND after polishing; on a regression
+// POLISH_QC_GATE selects the unpolished assembly.
 //
 // QC sits after funannotate clean/sort, not after medaka, because `clean` drops
 // contigs <200 bp and `sort` renames scaffolds -- so the post-polish numbers must

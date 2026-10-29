@@ -59,21 +59,13 @@ module_order:
       name: "07 Structural: RNA-seq alignment (STAR)"
       info: "RNA-seq alignment rate -- the transcript evidence BRAKER's gene models rest on."
 
-# NOTE (2026-10): bin/multiqc_custom_content.py was restructured to group
-# sections by pipeline stage (parent_id) instead of one flat list per tool, so:
-#  - stage03_blobtools_blob_circle + stage03_blobtools_snail no longer exist as
-#    separate ids; they're combined into stage03_blobtools_plots (one section,
-#    both images side by side).
-#  - stage07_braker_transcript_lengths no longer exists; it's now two sections,
-#    stage07_braker_transcript_lengths_cds and _span (native histograms, not a
-#    static image), both under the stage07 group.
-#  - Every stageNN_* id below now also carries parent_id/parent_name/
-#    parent_description set directly in its own file header, so they nest under
-#    one collapsible nav entry per stage. Giving the *parent* id its own order
-#    below positions the whole group; child order only matters within the group.
-#  - custom_data name overrides for the old image ids are gone: every section
-#    (table, native plot, and the blob/snail html block) now sets its own
-#    section_name/description inline, so custom_data has nothing left to do.
+# NOTE: bin/multiqc_custom_content.py groups its sections by pipeline stage:
+#  - Every stageNN_* id below carries parent_id/parent_name/parent_description
+#    in its own file header, so they nest under one collapsible nav entry per
+#    stage. Giving the *parent* id its own order below positions the whole
+#    group; child order only matters within the group.
+#  - Every section sets its own section_name/description inline, so no
+#    custom_data overrides are needed.
 #  - IMPORTANT, found by testing: order sorts sections DESCENDING (higher =
 #    earlier) at the top level, but ASCENDING (lower = earlier) for children
 #    sharing a parent_id. The two blocks below use opposite numbering for

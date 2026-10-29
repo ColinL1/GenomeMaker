@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Step 9: add Class=<class/family> to rmOutToGFF3.pl output, from the (relabelled) RepeatMasker .out.
+"""Add Class=<class/family> to rmOutToGFF3.pl output, from the (relabelled) RepeatMasker .out.
 
 Features and .out records are matched in order; the family in Target= must equal the .out family,
-and the counts must be equal (WP11 acceptance), otherwise the script fails.
+and the counts must be equal, otherwise the script fails.
 usage: repeat_gff_classes.py repeatmasker.out in.gff3 out.gff3
 """
 import re

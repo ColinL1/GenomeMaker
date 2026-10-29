@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WP6 query builder: split BRAKER proteins at introns that contain a scaffold gap.
+"""Gap-fusion query builder: split BRAKER proteins at introns that contain a scaffold gap.
 
 Every BRAKER transcript with an intron that fully contains an N run is cut into
 protein segments at those introns. Each junction is labelled by intron-hint support:

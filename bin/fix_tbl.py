@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 6b input: mechanical NCBI fixes to funannotate's .tbl before table2asn.
+"""Mechanical NCBI fixes to funannotate's .tbl before table2asn.
 
   - ncRNA features get ncRNA_class from the refined GFF3 (matched by scaffold, start, end, strand);
   - EC_number qualifiers are removed from CDS/proteins whose product is 'hypothetical protein'
@@ -9,7 +9,7 @@
   - trailing '.', ',', ';' or ':' are removed from product names (SEQ_FEAT.BadTrailingCharacter);
   - rRNA products 'Eukaryotic large/small subunit ribosomal RNA' become '28S/18S ribosomal RNA';
     rRNA models shorter than 90% of the Rfam model (LSU RF02543 3401, SSU RF01960 1831, 5.8S RF00002
-    154, 5S RF00001 119 bp) are fragments (owner decisions 2026-10-19, 2026-10-22). NCBI accepts a partial
+    154, 5S RF00001 119 bp) are fragments. NCBI accepts a partial
     end only at a sequence end or a gap, so per fragment, on the rRNA and on its gene:
       an end at a sequence end or next to a gap is marked partial ('<' 5', '>' 3'), the other end is not;
       a fragment with no such end is removed with its gene (unmarked it fails the discrepancy report,

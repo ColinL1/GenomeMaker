@@ -120,15 +120,8 @@ process GENOMESCOPE {
     path "versions.yml", emit: versions
 
     script:
-    // GenomeScope2 from a container, replacing the vendored config/bin/genomescope.R
-    // -- that script was GenomeScope *1.0* (its own header cites
-    // schatzlab/genomescope) despite every comment here claiming 2.0. v1 has no
-    // ploidy model, which matters for a highly heterozygous coral.
-    //
-    // The old positional call also passed a read length of 150 for ONT reads that
-    // are kilobases long. GenomeScope2 takes no read-length argument at all -- it
-    // only ever affected coverage reporting, never the haploid-length estimate --
-    // so the parameter disappears rather than needing a corrected value.
+    // GenomeScope2 from a container: it has the ploidy model a highly heterozygous
+    // coral needs, and takes no read-length argument.
     """
     awk 'BEGIN{OFS=" "}{print \$1, \$2}' ${meryl_hist} > kmer_db.meryl.hist.clean
 

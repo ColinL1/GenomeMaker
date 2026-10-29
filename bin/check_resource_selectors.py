@@ -6,9 +6,6 @@ Nextflow only emits a WARNING for a selector that matches no process
 check config selectors against process names at all. So a renamed or deleted
 process leaves a silently dead resource entry -- and, worse, a process with no
 selector and no label silently falls back to Nextflow's 1-cpu default.
-
-Both happened in this pipeline (COPY_FILE deleted, SOFTWARE_VERSIONS renamed to
-COLLATE_VERSIONS), which is why this check exists.
 """
 import glob
 import re

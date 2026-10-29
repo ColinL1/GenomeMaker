@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Step 9b (WP11, D3): relabel repeat classes after RepeatClassifier; the masked sequence is unchanged.
+"""Relabel repeat classes after RepeatClassifier; the masked sequence is unchanged.
 
   1. Family labels come from the library headers ('>name#Class/Family'). Families labelled
      Unknown/unknown take the RepeatClassifier result (its *.classified FASTA).
-  2. All labels are normalised (WP11.2): 'unknown' -> 'Unknown', 'X/unknown' -> 'X/Unknown',
+  2. All labels are normalised: 'unknown' -> 'Unknown', 'X/unknown' -> 'X/Unknown',
      'DNAnona[/X]' and 'DNAauto[/X]' -> 'DNA[/X]'.
   3. Column 11 (class/family) of repeatmasker.out is rewritten from column 10 (family name).
      Simple_repeat, Low_complexity and other RepeatMasker-internal labels of families that are not

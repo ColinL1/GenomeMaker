@@ -2,8 +2,7 @@
 // 09b_software_versions.nf
 // Collate the per-process versions.yml files into the report's software table.
 //
-// WHY PER-PROCESS CAPTURE, not parsing container tags out of the module files
-// (which is what this file used to do):
+// WHY PER-PROCESS CAPTURE, not parsing container tags out of the module files:
 //
 //   1. A container TAG can disagree with the tool it ships. Verified on this
 //      pipeline: `teambraker/braker3:v3.1.1` runs braker.pl **3.0.8**, and
@@ -12,8 +11,7 @@
 //   2. Under `-profile conda` there are no containers at all, so a tag-based
 //      approach reports nothing.
 //
-// Each process therefore runs its tool's own --version at runtime. Every command
-// was verified against the pinned container before being committed, and each is
+// Each process therefore runs its tool's own --version at runtime. Each command is
 // wrapped in `|| echo unknown` so a bad command degrades to "unknown" rather than
 // failing the task.
 //

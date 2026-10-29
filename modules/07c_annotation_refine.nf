@@ -2,11 +2,11 @@
 // 07c_annotation_refine.nf
 // Refinement of the merged gene models BEFORE protein extraction, so OMArk,
 // StringTie, functional annotation and the NCBI files all see one canonical set.
-//   WP1 UTRs from BRAKER's stringtie2utr output; transcript span = exon extent
-//   WP2 gene membership recomputed with a frame-aware rule (undoes AGAT's merges)
-//   WP3 tRNAs restricted to the EukHighConfidenceFilter set; pseudogenes to a separate file
-//   WP4 Rfam filters (miRNA, non-eukaryotic rRNA, opposite-strand duplicates, gaps, repeats)
-//   WP5 evidence / haplotig tags      WP6 split of gene models fused across assembly gaps
+//   UTRs from BRAKER's stringtie2utr output; transcript span = exon extent
+//   gene membership recomputed with a frame-aware rule (undoes AGAT's merges)
+//   tRNAs restricted to the EukHighConfidenceFilter set; pseudogenes to a separate file
+//   Rfam filters (miRNA, non-eukaryotic rRNA, opposite-strand duplicates, gaps, repeats)
+//   evidence / haplotig tags; split of gene models fused across assembly gaps
 //   isoform filter: alternative isoforms without evidence of their own are removed
 // Scripts: bin/refine_annotation.py, bin/isoform_filter.py, bin/haplotig_scan_classify.py,
 // bin/gap_junction_segments.py, bin/classify_gap_junctions.py, bin/protein_identity.py.
@@ -225,7 +225,7 @@ process REFINE_GFF {
     path rm_out
     path haplotig_tags    // or an empty NO_ placeholder
     path gap_tags         // or an empty NO_ placeholder
-    path transcript_edits // owner transcript edits, or the NO_TRANSCRIPT_EDITS placeholder
+    path transcript_edits // manual transcript edits, or the NO_TRANSCRIPT_EDITS placeholder
 
     output:
     path "refined.gff3",          emit: gff
@@ -388,7 +388,7 @@ process ISOFORM_FILTER {
     """
 }
 
-// Strict GFF3 validation: any warning or error fails (G1 / NCBI).
+// Strict GFF3 validation: any warning or error fails (as NCBI would).
 process GT_VALIDATE_REFINED {
     label 'res_light'
     tag   "${gff.baseName}"
@@ -415,7 +415,7 @@ process GT_VALIDATE_REFINED {
     """
 }
 
-// G2: the refined proteins must equal the unrefined ones, except the split genes.
+// The refined proteins must equal the unrefined ones, except the split genes.
 process PROTEIN_IDENTITY {
     label 'res_light'
     tag   "protein_identity"
@@ -443,7 +443,7 @@ process PROTEIN_IDENTITY {
     """
 }
 
-// Proteins of the unrefined (AGAT-merged) models, for the G2 comparison only; not published.
+// Proteins of the unrefined (AGAT-merged) models, for the protein identity check only; not published.
 process GFFREAD_UNREFINED {
     label 'res_light'
     tag   "gffread_unrefined"

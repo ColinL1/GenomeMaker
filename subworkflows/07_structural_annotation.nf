@@ -79,14 +79,13 @@ workflow STRUCTURAL_ANNOTATION {
         )
 
         // Strict GFF3 spec validation in its own container (GenomeTools is not in
-        // the AGAT image, which is why the old inline `gt gff3validator` could only fail).
+        // the AGAT image).
         GT_GFF3_VALIDATE(MERGE_ANNOTATIONS.out.gff3)
 
         // GATE: everything downstream takes the merged GFF3 only once the validator
-        // has passed. Previously the validator was a side branch, so protein
-        // extraction and functional annotation started on a GFF3 that then failed
-        // validation. The file itself is unchanged (same path), only its release
-        // waits for the validation report.
+        // has passed, so protein extraction and functional annotation never start on
+        // a GFF3 that fails validation. The file itself is unchanged (same path),
+        // only its release waits for the validation report.
         def validated_gff3 = MERGE_ANNOTATIONS.out.gff3
             .combine(GT_GFF3_VALIDATE.out.report)
             .map { gff, _report -> gff }
@@ -150,7 +149,7 @@ workflow STRUCTURAL_ANNOTATION {
 
         EXTRACT_PROTEINS(refined_gff3, assembly)
 
-        // G2: proteins equal the unrefined ones except the split genes and removed transcripts
+        // Protein identity: proteins equal the unrefined ones except the split genes and removed transcripts
         GFFREAD_UNREFINED(validated_gff3, assembly)
         PROTEIN_IDENTITY(EXTRACT_PROTEINS.out.proteins_faa, GFFREAD_UNREFINED.out.proteins, splits_ch)
 

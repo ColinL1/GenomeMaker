@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Step 12 (WP7): README.md and summary.tsv for the release, one protein-coding number everywhere.
+"""README.md and summary.tsv for the release, one protein-coding number everywhere.
 
-The protein-coding count is genes - tRNA - rRNA - ncRNA from funannotate's stats.json (WP7) and is
+The protein-coding count is genes - tRNA - rRNA - ncRNA from funannotate's stats.json and is
 checked against the number of genes with an mRNA in the release GFF3; the script fails if they differ.
 
 usage: release_report.py --stats F.stats.json --release-gff R.gff3

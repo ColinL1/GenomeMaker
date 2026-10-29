@@ -1,18 +1,13 @@
 // ============================================================
 // 04_assembly_polish.nf
-// Assembly polishing: Racon (ONT) → Medaka (ONT) → funannotate clean/sort
-// Final BUSCO on polished assembly
+// Assembly polishing: Medaka (ONT) → funannotate clean/sort
+// BUSCO, Merqury QV and gfastats before and after polishing
 // ============================================================
 
 nextflow.enable.dsl = 2
 
 // ============================================================
-// NOTE: a RACON_POLISH process lived here and has been REMOVED.
-//
-// It was also broken: it called minimap2 while its container was
-// racon:1.5.0, which does not ship minimap2.
-//
-// Why it is gone rather than fixed:
+// NOTE: no Racon pre-step.
 //   * Medaka's models are trained on draft assemblies from particular
 //     pipelines; feeding it a Racon-modified draft moves the input off that
 //     training distribution. ONT's own medaka_consensus workflow dropped the
@@ -23,7 +18,7 @@ nextflow.enable.dsl = 2
 //   * It cost a full extra minimap2 pass over 14.5 GB of reads.
 //
 // Merqury QV (MERQURY_QV below) is the measurement that would settle this
-// empirically if it is ever revisited: git history has the original process.
+// empirically if it is ever revisited.
 // ============================================================
 
 // ============================================================
@@ -315,9 +310,7 @@ process BUSCO_FINAL {
 // Process: MERQURY_QV
 // Reference-free consensus quality (QV) from the ONT read k-mer database.
 //
-// WHY: nothing in this pipeline previously checked that polishing made the
-// assembly BETTER. BUSCO ran once, after the whole chain, so a polishing step
-// that degraded the consensus was indistinguishable from one that helped.
+// WHY: to check that polishing made the assembly BETTER, not only different.
 // Merqury's QV compares assembly k-mers against the read k-mer spectrum, so it
 // measures base-level accuracy directly and needs no reference genome.
 //

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 0b: classify VecScreen (blastn vs UniVec_Core) hits with NCBI's VecScreen match categories.
+"""Classify VecScreen (blastn vs UniVec_Core) hits with NCBI's VecScreen match categories.
 
 Raw blastn score thresholds (VecScreen with its standard parameters):
   terminal match (within 25 bp of a sequence end): Strong >= 24, Moderate 19-23, Weak 16-18

@@ -2,9 +2,9 @@
 // 03c_screens.nf
 // NCBI contamination screens and sequence hygiene:
 //   FCS-adaptor, VecScreen (UniVec), FCS-GX -> review of unclear hits -> apply actions.
-// Run on the host-filtered contigs (before scaffolding) and again on the released
-// FASTA (QC gate G9). Scripts: bin/vecscreen_classify.py, bin/screen_review.py,
-// bin/apply_screen_actions.py.
+// Run on the host-filtered contigs (before scaffolding); FCS-adaptor and VecScreen
+// also on the mitogenome (stage 05). Scripts: bin/vecscreen_classify.py,
+// bin/screen_review.py, bin/apply_screen_actions.py.
 // ============================================================
 
 nextflow.enable.dsl = 2
@@ -153,7 +153,7 @@ process FCS_GX {
 }
 
 // Lists FCS-GX REVIEW rows and VecScreen Strong/Moderate matches, and turns the
-// owner's decisions (params.screen_decisions) into actions. This step always succeeds,
+// manual decisions (params.screen_decisions) into actions. This step always succeeds,
 // so the list is published; APPLY_SCREEN_ACTIONS stops the run while any item is undecided.
 process SCREEN_REVIEW {
     label 'res_light'

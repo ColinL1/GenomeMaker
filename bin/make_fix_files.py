@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 5 -> 6: turn the owner-reviewed product curation (refined gene IDs) into funannotate's
+"""Turn the reviewed product curation (refined gene IDs) into funannotate's
 --fix and --remove files keyed by the post-rename locus tags.
 
 The locus tags are computed with funannotate's own convertgff2tbl on the same GFF3 and FASTA that

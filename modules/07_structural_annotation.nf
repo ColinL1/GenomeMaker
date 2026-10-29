@@ -29,13 +29,8 @@ process TRNASCAN_SE {
     path "versions.yml", emit: versions
 
     script:
-    // -j/--gff is tRNAscan-SE's own GFF3 writer (verified present in 2.0.13).
-    // This replaces config/bin/trnascan_to_gff3.pl, which parsed the -o TABULAR
-    // output using the field layout of the -f STRUCTURE file: its column indices
-    // were wrong throughout ($f[4] is the tRNA type, not the start; $f[7] is the
-    // intron end, not the strand; $f[10] is the note field), and its strand logic
-    // made minus-strand features impossible to emit. It produced a malformed GFF
-    // that then fed AGAT. Using the tool's own writer removes the whole class of bug.
+    // -j/--gff is tRNAscan-SE's own GFF3 writer (verified present in 2.0.13),
+    // used instead of converting the -o tabular output.
     """
     tRNAscan-SE -E -I -H --detail --thread ${task.cpus} \\
       -o trnascan.out \\
@@ -376,8 +371,8 @@ process SPLIT_STRANDED_BAM {
 // Process: BRAKER4_RUN
 // Structural gene prediction with BRAKER4 (Snakemake re-implementation of BRAKER3)
 //
-// Replaces BRAKER3_RUN. braker.pl 3.0.8 (teambraker/braker3 v3.1.1 and v3.0.7.6)
-// cannot use --busco_lineage any more: its compleasm_to_hints.py forces an
+// Why not BRAKER3: braker.pl 3.0.8 (teambraker/braker3 v3.1.1 and v3.0.7.6)
+// cannot use --busco_lineage: its compleasm_to_hints.py forces an
 // '_odb10' folder name, while the bundled compleasm 0.2.8 only uses odb12
 // (and odb10 datasets are no longer downloadable). BRAKER4 handles odb12.
 //
@@ -508,10 +503,7 @@ process MERGE_ANNOTATIONS {
     path "versions.yml", emit: versions
 
     script:
-    // Output names are param-derived. They used to be hardcoded to
-    // `PAG_..._1.1.gff3` and `Phar.braker.prot.fasta` -- "Phar" is P. harrisoni,
-    // inconsistent with species_name='Porites_sp', and "1.1" was a magic version
-    // string that no longer tracked anything.
+    // Output names are derived from species_name and annotation_version.
     def gff_out = "${params.species_name}.v${params.annotation_version}.gff3"
     def use_rfam = !ncrna_tblout.name.startsWith('NO_') && !rfam_family.name.startsWith('NO_')
     """
@@ -639,10 +631,8 @@ process EXTRACT_PROTEINS {
 // Process: GT_GFF3_VALIDATE
 // Strict GFF3 spec validation with GenomeTools.
 //
-// WHY ITS OWN PROCESS: MERGE_ANNOTATIONS previously ran `gt gff3validator`
-// inside the AGAT container, which does not ship GenomeTools -- so that line
-// could only ever fail. Rather than hunting for a mulled AGAT+GT image, this
-// keeps one tool per container, which is how the rest of the pipeline is built.
+// WHY ITS OWN PROCESS: the AGAT container does not ship GenomeTools. This keeps
+// one tool per container, which is how the rest of the pipeline is built.
 // ============================================================
 process GT_GFF3_VALIDATE {
     label 'structural_env'

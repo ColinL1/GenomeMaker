@@ -131,7 +131,7 @@ def refined_gff():
 
 
 def protein_coding(a):
-    """Protein-coding genes from funannotate's stats.json 'annotation' block (WP7)."""
+    """Protein-coding genes from funannotate's stats.json 'annotation' block."""
     g = a.get("genes")
     if g is None:
         return None
