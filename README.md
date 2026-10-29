@@ -108,7 +108,6 @@ Most defaults in `nextflow.config` point into a `config/` folder in the pipeline
 | `--rfam_cm`, `--rfam_clanin`, `--rfam_family` | Rfam covariance models (cmpress'd), clan file and family table |
 | `--mito_ref` | Reference mitogenome for read recruitment |
 | `--mito_annot_ref_fasta`, `--mito_annot_ref_gff` | Annotated related mitogenome for Liftoff (`false` = MITOS2 only) |
-| `--bin_path` | Folder holding `rank.py` and `combine_comparison.py`; set it to `<pipeline>/bin/` on a fresh clone |
 
 ---
 

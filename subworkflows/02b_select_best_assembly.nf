@@ -15,7 +15,6 @@ workflow SELECT_BEST_ASSEMBLY {
         gfastats_ch            // (name, path) -- from MULTI_ASSEMBLER.out.gfastats
         busco_host_summary_ch  // (name, path) -- MULTI_ASSEMBLER.out.busco_summary
         quast_ch               // (name, path) -- QUAST report dirs
-        rank_script
         expected_genome_size   // from GenomeScope2, or params.genome_size; [] disables the check
 
     main:
@@ -23,7 +22,6 @@ workflow SELECT_BEST_ASSEMBLY {
             gfastats_ch.map { name, p -> p }.collect(),
             busco_host_summary_ch.map { name, p -> p }.collect(),
             quast_ch.map { name, p -> p }.collect(),
-            rank_script,
             expected_genome_size
         )
 

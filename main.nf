@@ -112,9 +112,6 @@ workflow CORAL_GENOME_PIPELINE {
         : file("${projectDir}/assets/NO_FILE", checkIfExists: true)
     def busco_offline_ch = channel.value(busco_offline_path)
 
-    def rank_script_path               = file("${params.bin_path}rank.py")
-    def combine_comparison_script_path = file("${params.bin_path}combine_comparison.py")
-
     // Optional MultiQC config (e.g. custom module order / titles). Falls back
     // to a harmless placeholder if params.multiqc_config isn't set, and the
     // MULTIQC process skips -c when it sees that placeholder name.
@@ -145,9 +142,7 @@ workflow CORAL_GENOME_PIPELINE {
     def kmer_reads      = PREPROCESS_READS.out.kmer_reads
 
     // Raw, MultiQC-parseable read QC (FastQC zips, NanoPlot/NanoStat text) for
-    // both the raw and trimmed stages. Previously this globbed the per-stage
-    // MultiQC *output* directories and fed those back into the final MultiQC,
-    // which produces nothing parseable.
+    // both the raw and trimmed stages.
     def read_qc_ch = PREPROCESS_READS.out.raw_qc_files
 
     // Every process reports its own tool version at runtime; those files are
@@ -202,8 +197,7 @@ workflow CORAL_GENOME_PIPELINE {
         INPUT_ASSEMBLY_QC(
             channel.value(input_assembly_path),
             params.busco_lineage,    // single lineage, e.g. anthozoa_odb12
-            busco_offline_ch,
-            combine_comparison_script_path
+            busco_offline_ch
         )
 
         all_gfastats_ch        = INPUT_ASSEMBLY_QC.out.gfastats
@@ -248,8 +242,7 @@ workflow CORAL_GENOME_PIPELINE {
             genome_size_est,
             params.busco_lineage,    // single lineage, e.g. anthozoa_odb12
             necat_bin_ch,
-            busco_offline_ch,
-            combine_comparison_script_path
+            busco_offline_ch
         )
 
         def all_assemblies_ch = MULTI_ASSEMBLER.out.assemblies
@@ -270,7 +263,6 @@ workflow CORAL_GENOME_PIPELINE {
             all_gfastats_ch,
             busco_summary_ch,
             MULTI_ASSEMBLER.out.quast_reports,
-            rank_script_path,
             genome_size_est
         )
 
@@ -283,7 +275,7 @@ workflow CORAL_GENOME_PIPELINE {
     selected_name_ch.view { name -> "Selected assembler: ${name}" }
 
     // ===========================
-    // 02c. PURGE_DUPS
+    // 03b. PURGE_DUPS
     // Remove duplicated haplotigs from the selected assembly using
     // ONT coverage, before contamination filtering / polishing.
     // ===========================
@@ -293,16 +285,15 @@ workflow CORAL_GENOME_PIPELINE {
     versions_ch = versions_ch.mix(PURGE_DUPS.out.versions)
 
     // ===========================
-    // 02d. CHECKPOINT -- measure the assembly AFTER purge_dups
+    // 03b. CHECKPOINT -- measure the assembly AFTER purge_dups (02d_assembly_checkpoint)
     //
     // This serves two purposes at once, which is why it is not optional:
     //   1. QC. purge_dups deletes sequence; without a measurement here there is
     //      no way to tell a correct haplotig purge from an over-aggressive one.
     //   2. CORRECTNESS. BLOBTOOLS_ADD_BUSCO must be given a BUSCO table computed
-    //      on the SAME assembly the BlobDir was built from. It used to receive the
-    //      table from the pre-purge selected assembly, but `get_seqs -e` renames
-    //      split contigs, so those rows matched nothing -- and blobtools drops
-    //      unmatched rows SILENTLY, leaving an empty BUSCO track.
+    //      on the SAME assembly the BlobDir was built from: `get_seqs -e` renames
+    //      split contigs, so a pre-purge table matches nothing -- and blobtools
+    //      drops unmatched rows SILENTLY, leaving an empty BUSCO track.
     // ===========================
     CHECKPOINT_PURGED(
         purged_assembly_path,
@@ -318,11 +309,9 @@ workflow CORAL_GENOME_PIPELINE {
     ASSEMBLY_FILTERING(
         purged_assembly_path,
         porechopped_ch,
-        // The full_table.tsv computed on the PURGED assembly -- the same sequences
-        // the BlobDir is built from. Two earlier bugs lived on this line: it passed
-        // a short_summary.txt (no per-contig rows at all), and it passed the
-        // pre-purge assembly's table (contig IDs renamed by get_seqs -e). Both
-        // produced an empty BUSCO track with no warning.
+        // The full_table.tsv (not short_summary.txt, which has no per-contig rows)
+        // computed on the PURGED assembly -- the same sequences the BlobDir is built
+        // from. Any other table gives an empty BUSCO track with no warning.
         CHECKPOINT_PURGED.out.busco_table.first(),
         blast_db_path,
         blast_taxdump_path,
@@ -334,7 +323,7 @@ workflow CORAL_GENOME_PIPELINE {
     versions_ch = versions_ch.mix(ASSEMBLY_FILTERING.out.versions)
 
     // ===========================
-    // 03c. CHECKPOINT -- measure the assembly AFTER contamination filtering
+    // 03. CHECKPOINT -- measure the assembly AFTER contamination filtering (02d_assembly_checkpoint)
     //
     // Purely QC, so it is behind a toggle. Its value is the DELTA against the
     // purged checkpoint above: that difference is exactly how much sequence the
@@ -370,7 +359,7 @@ workflow CORAL_GENOME_PIPELINE {
         screen_qc_ch = SCREEN_ASSEMBLY.out.qc_files
         versions_ch  = versions_ch.mix(SCREEN_ASSEMBLY.out.versions)
     } else {
-        log.warn "Contamination screens SKIPPED (run_screens=false); QC gate G9 reports 'not run'"
+        log.warn "Contamination screens SKIPPED (run_screens=false); the release QC reports the screen checks as 'not run'"
     }
 
     // ===========================
@@ -458,11 +447,9 @@ workflow CORAL_GENOME_PIPELINE {
         report_files_ch    = report_files_ch.mix(REPEATS_PIPELINE.out.rrna_gff)
         versions_ch        = versions_ch.mix(REPEATS_PIPELINE.out.versions)
     } else {
-        // No COPY_FILE passthrough here any more. masked_assembly_ch is consumed
-        // ONLY by structural and functional annotation, and both now require
-        // run_repeats=true (enforced above), so with repeats off this channel has
-        // no consumer at all. Copying the assembly to satisfy a channel nobody
-        // reads was dead work -- and COPY_FILE's entire reason to exist.
+        // masked_assembly_ch is consumed only by structural and functional
+        // annotation, and both require run_repeats=true (enforced below), so with
+        // repeats off it has no consumer.
         log.info "Skipping repeat annotation (run_repeats=false); structural/functional annotation unavailable"
     }
 
@@ -475,10 +462,9 @@ workflow CORAL_GENOME_PIPELINE {
     def run_structural = params.run_structural_annotation.toString().toBoolean() && rnaseq_dir_path && protein_refs_path
 
     // BRAKER is run with --softmasking, which requires a repeat-softmasked genome.
-    // Rather than making that flag conditional (and silently giving BRAKER an
-    // unmasked genome via the COPY_FILE branch), repeats are a PREREQUISITE for
-    // structural annotation: the RepeatMasker -xsmall output is passed straight
-    // through, so masking is computed once and reused rather than left to BRAKER.
+    // Repeats are therefore a PREREQUISITE for structural annotation: the
+    // RepeatMasker -xsmall output is passed straight through, so masking is
+    // computed once and reused rather than left to BRAKER.
     if (run_structural && !params.run_repeats.toString().toBoolean()) {
         error """
         run_structural_annotation=true requires run_repeats=true.
@@ -558,6 +544,7 @@ workflow CORAL_GENOME_PIPELINE {
             STRUCTURAL_ANNOTATION.out.refine_splits,
             STRUCTURAL_ANNOTATION.out.refine_tags,
             STRUCTURAL_ANNOTATION.out.refine_report,
+            STRUCTURAL_ANNOTATION.out.trna_pseudogenes,
             STRUCTURAL_ANNOTATION.out.protein_identity,
             proteins_faa_ch,
             STRUCTURAL_ANNOTATION.out.refined_validation,
@@ -615,7 +602,7 @@ workflow CORAL_GENOME_PIPELINE {
         .mix(ASSEMBLY_POLISHING.out.merqury_post.map { stage, p -> p })
         .mix(ASSEMBLY_POLISHING.out.polish_qc_report)
         .mix(ASSEMBLY_POLISHING.out.polish_gate_mqc)
-        // 03b/03c -- what purge_dups and the taxon filter actually removed
+        // 03b/03 -- what purge_dups and the taxon filter actually removed (checkpoints)
         .mix(CHECKPOINT_PURGED.out.busco_summary)
         .mix(CHECKPOINT_PURGED.out.gfastats)
         .mix(filtered_busco_ch)

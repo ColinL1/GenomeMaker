@@ -16,8 +16,7 @@ process RANK_ASSEMBLIES {
     input:
     path gfastats_reports    // ${name}.gfastats.txt  (name-embedded filenames)
     path busco_summaries     // ${name}.${lineage}.short_summary.txt, HOST lineage only
-    path quast_reports       // ${name}_quast_report/ dirs -- QUAST was previously computed and then unused
-    path rank_script
+    path quast_reports       // ${name}_quast_report/ dirs
     val  expected_genome_size
 
     output:
@@ -31,11 +30,10 @@ process RANK_ASSEMBLIES {
     // on BUSCO completeness while being badly wrong. Empty/0 disables the check.
     def expected = (expected_genome_size ?: 0)
     """
-    PYTHON=\$(command -v python3 || command -v python) || { echo "ERROR: no python interpreter found" >&2; exit 1; }
     export EXPECTED_GENOME_SIZE='${expected}'
     export SIZE_TOLERANCE='${params.assembly_size_tolerance}'
     export BUSCO_TIE_BAND='${params.busco_tie_band}'
-    \$PYTHON ${rank_script}
+    rank.py
     
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

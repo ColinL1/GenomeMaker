@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Rank assemblies and pick the winner.
 
 Inputs are discovered in the CWD (Nextflow stages them there):
@@ -50,8 +51,7 @@ def parse_gfastats(path):
 
 
 def parse_quast(name):
-    """Pull a few QUAST metrics if its report is present. QUAST was previously
-    computed for every assembler and then used by nothing at all."""
+    """Pull a few QUAST metrics if its report is present."""
     hits = glob.glob(f"{name}_quast_report/report.tsv") or glob.glob(f"{name}*report.tsv")
     if not hits:
         return {}

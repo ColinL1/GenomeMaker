@@ -80,6 +80,7 @@ workflow RELEASE {
         refine_splits
         refine_tags
         refine_report
+        trna_pseudogenes    // tRNA pseudogenes kept out of the main GFF3; released in annotation/extra/
         protein_identity
         refined_proteins
         gt_reports          // GT validation of the refined GFF3 files
@@ -90,7 +91,7 @@ workflow RELEASE {
         phobius             // or NO_ placeholder
         funannotate_db
         repeat_files        // RepeatMasker .out, .tbl, repeats.gff3, classified library
-        repeat_lib          // classified library (G8)
+        repeat_lib          // classified library (checked for repeat labels)
         classify_report     // RepeatClassifier family counts
         symbiont_assembly   // may be empty (skip_blobtools, or no symbiont fraction)
         mito_fasta          // channel, may be empty
@@ -184,7 +185,7 @@ workflow RELEASE {
         def qc_files = ANNOTATION_QC_GATE.out.tsv.mix(refine_report, protein_identity, CURATE_PRODUCTS_FINAL.out.curation,
                                                        screen_files, sym_summary, qv_file, busco_summary)
             .flatten().filter { f -> !f.name.startsWith('NO_') }
-        RELEASE_ASSEMBLE(ANNOTATION_QC_GATE.out.tsv, assembly, SCAFFOLD_NAME_MAP.out.map, anno_ch, sets.collect(),
+        RELEASE_ASSEMBLE(ANNOTATION_QC_GATE.out.tsv, assembly, SCAFFOLD_NAME_MAP.out.map, anno_ch, sets.mix(trna_pseudogenes).collect(),
             repeat_files.collect(), TABLE2ASN.out.files, mito_fasta.mix(mito_gff, mito_check).collect().ifEmpty([]),
             qc_files.unique { f -> f.name }.collect(), RELEASE_REPORT.out.readme.mix(RELEASE_REPORT.out.summary).collect())
 

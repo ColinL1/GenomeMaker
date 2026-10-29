@@ -19,7 +19,6 @@ workflow INPUT_ASSEMBLY_QC {
         assembly       // path -- user-supplied fasta
         busco_lineage  // single lineage, e.g. anthozoa_odb12
         busco_db_dir
-        combine_comparison_script
 
     main:
         def name = 'input_assembly'
@@ -30,8 +29,7 @@ workflow INPUT_ASSEMBLY_QC {
 
         COMBINE_COMPARISON(
             GFASTATS_QC.out.gfastats_report.map { n, p -> p }.collect(),
-            BUSCO_ASSEMBLY.out.busco_summary.map { n, p -> p }.collect(),
-            combine_comparison_script
+            BUSCO_ASSEMBLY.out.busco_summary.map { n, p -> p }.collect()
         )
 
     emit:

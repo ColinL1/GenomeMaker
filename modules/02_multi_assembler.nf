@@ -345,7 +345,6 @@ process COMBINE_COMPARISON {
     input:
     path gfastats_reports    // ${name}.gfastats.txt files
     path busco_summaries     // ${name}.${lineage}.short_summary.txt files (host lineage)
-    path combine_comparison_script
 
     output:
     path "assembly_comparison.tsv",  emit: comparison_tsv
@@ -354,8 +353,7 @@ process COMBINE_COMPARISON {
 
     script:
     """
-    PYTHON=\$(command -v python3 || command -v python) || { echo "ERROR: no python interpreter found" >&2; exit 1; }
-    \$PYTHON  ${combine_comparison_script}
+    combine_comparison.py
     
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

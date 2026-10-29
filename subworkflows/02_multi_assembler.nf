@@ -17,7 +17,6 @@ workflow MULTI_ASSEMBLER {
         busco_lineage         // single lineage, e.g. anthozoa_odb12
         necat_bin_dir
         busco_db_dir
-        combine_comparison_script
 
     main:
         def assemblers_list = params.assemblers instanceof List
@@ -67,8 +66,7 @@ workflow MULTI_ASSEMBLER {
         // Aggregation: name-embedded filenames make plain path lists safe here.
         COMBINE_COMPARISON(
             GFASTATS_QC.out.gfastats_report.map { name, p -> p }.collect(),
-            BUSCO_ASSEMBLY.out.busco_summary.map { name, p -> p }.collect(),
-            combine_comparison_script
+            BUSCO_ASSEMBLY.out.busco_summary.map { name, p -> p }.collect()
         )
 
     emit:
