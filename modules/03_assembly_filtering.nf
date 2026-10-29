@@ -45,6 +45,20 @@ nextflow.enable.dsl = 2
 // resumed run. As a process it is cached, provenanced and published like
 // everything else.
 // ============================================================
+// meta.yaml lines (YAML indentation kept here, not in the shell script)
+def meta_yaml_lines() {
+    return ['assembly:',
+            "    alias: ${params.species_name}",
+            '    record_type: contig'] +
+           (params.bioproject ? ["    bioproject: ${params.bioproject}"] : []) +
+           (params.biosample ? ["    biosample: ${params.biosample}"] : []) +
+           ['taxon:',
+            "    name: ${params.species_name}",
+            'reads:',
+            '    coverage:',
+            '        platform: ONT']
+}
+
 process WRITE_META_YAML {
     tag   "meta_yaml"
 
@@ -56,24 +70,14 @@ process WRITE_META_YAML {
     path "versions.yml", emit: versions
 
     script:
-    // accessions only when set (they are optional until the NCBI release)
-    def acc = (params.bioproject ? "\n    bioproject: ${params.bioproject}" : '') +
-              (params.biosample ? "\n    biosample: ${params.biosample}" : '')
+    // `reads:` declares the coverage library (named after the BAM, coverage.bam, by
+    // MINIMAP2_SORT). Without it `blobtools filter --summary` crashes in cov.py
+    // (AttributeError: reads) on any BlobDir that has coverage added.
+    // Accessions only when set (they are optional until the NCBI release).
+    def meta = meta_yaml_lines().collect { l -> "'${l}'" }.join(' ')
     """
-    # `reads:` declares the coverage library (named after the BAM, coverage.bam,
-    # by MINIMAP2_SORT). Without it `blobtools filter --summary` crashes in
-    # cov.py (AttributeError: reads) on any BlobDir that has coverage added.
-    cat > meta.yaml <<'META'
-assembly:
-    alias: ${params.species_name}${acc}
-    record_type: contig
-taxon:
-    name: ${params.species_name}
-reads:
-    coverage:
-        platform: ONT
-META
-    
+    printf '%s\\n' ${meta} > meta.yaml
+
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         python: "\$(python3 --version 2>&1 | sed 's/Python //' || echo unknown)"
@@ -82,8 +86,9 @@ META
     """
 
     stub:
+    def meta = meta_yaml_lines().collect { l -> "'${l}'" }.join(' ')
     """
-    printf 'assembly:\\n    alias: ${params.species_name}\\ntaxon:\\n    name: ${params.species_name}\\nreads:\\n    coverage:\\n        platform: ONT\\n' > meta.yaml
+    printf '%s\\n' ${meta} > meta.yaml
     
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
