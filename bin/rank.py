@@ -7,13 +7,16 @@ Inputs are discovered in the CWD (Nextflow stages them there):
   <name>_quast_report/report.tsv         -- QUAST report per assembler (optional)
 
 Environment:
-  EXPECTED_GENOME_SIZE  expected haploid size in bp (0/unset disables the check)
+  EXPECTED_GENOME_SIZE  expected haploid size in bp (required: params.genome_size or GenomeScope2)
   SIZE_TOLERANCE        fractional deviation tolerated, e.g. 0.30 for +/-30%
-  BUSCO_TIE_BAND        BUSCO score difference (pp) treated as a tie, e.g. 0.5
+  BUSCO_TIE_BAND        BUSCO completeness difference (pp) treated as a tie, e.g. 2.0
 
-Scoring: BUSCO completeness penalised for duplication, with N50 as a genuine
-tie-break inside a tolerance band. Previously N50 only broke EXACT float ties,
-which essentially never happen, so contiguity never influenced the choice.
+Ranking:
+  1. assemblies outside +/-SIZE_TOLERANCE of the expected size are SIZE_OUTLIERs, ranked last;
+  2. among the rest, every assembly within BUSCO_TIE_BAND of the best BUSCO C (S+D; duplication
+     is left to purge_dups) is a candidate, and the one closest to the expected size wins;
+  3. N50 breaks a tie on size.
+assembly_ranking.tsv records the size deviation and which rule decided.
 """
 import glob
 import os
@@ -72,7 +75,9 @@ def parse_quast(name):
 
 expected = float(os.environ.get("EXPECTED_GENOME_SIZE") or 0)
 size_tol = float(os.environ.get("SIZE_TOLERANCE") or 0.30)
-tie_band = float(os.environ.get("BUSCO_TIE_BAND") or 0.5)
+tie_band = float(os.environ.get("BUSCO_TIE_BAND") or 2.0)
+if expected <= 0:
+    sys.exit("ERROR: no expected genome size -- set params.genome_size or run GenomeScope2 (run_genomescope)")
 
 busco_by_name = {}
 for f in glob.glob("*.short_summary.txt"):
@@ -92,55 +97,58 @@ rows = []
 for name, (complete_pct, dup_pct) in busco_by_name.items():
     n50, total = stats_by_name.get(name, (0, 0))
     quast = parse_quast(name)
-    # Primary score rewards completeness and penalises duplication (unpurged
-    # haplotigs). N50 is NOT folded in here -- it is applied as a tie-break below,
-    # so a marginally-more-complete but far more fragmented assembly cannot win on
-    # a rounding difference.
-    score = complete_pct - 2 * dup_pct
-
-    size_flag = "ok"
-    if expected > 0 and total > 0:
-        dev = abs(total - expected) / expected
-        if dev > size_tol:
-            size_flag = f"SIZE_OUTLIER(+{dev:.0%})" if total > expected else f"SIZE_OUTLIER(-{dev:.0%})"
-    elif expected > 0:
+    dev = (total - expected) / expected if total > 0 else None
+    if dev is None:
         size_flag = "size_unknown"
-
-    rows.append(dict(name=name, complete=complete_pct, dup=dup_pct, n50=n50,
-                     total=total, score=score, size_flag=size_flag,
+    elif abs(dev) > size_tol:
+        size_flag = f"SIZE_OUTLIER({dev:+.0%})"
+    else:
+        size_flag = "ok"
+    rows.append(dict(name=name, complete=complete_pct, dup=dup_pct, n50=n50, total=total,
+                     dev=dev, size_flag=size_flag, decided_by="",
                      quast_contigs=quast.get("# contigs", ""),
                      quast_largest=quast.get("Largest contig", "")))
 
-# Assemblies whose size is wildly off the expectation are ranked last rather than
-# silently dropped, so the ranking table still shows them and why.
-def sort_key(r):
-    return (0 if r["size_flag"] in ("ok", "size_unknown") else 1,
-            -r["score"], -r["n50"])
+# Size outliers are ranked last rather than dropped, so the table still shows them and why.
+eligible = [r for r in rows if not r["size_flag"].startswith("SIZE_OUTLIER")] or rows
+best_c = max(r["complete"] for r in eligible)
+band = [r for r in eligible if best_c - r["complete"] <= tie_band]
 
-rows.sort(key=sort_key)
 
-# --- tie-break: within tie_band percentage points of the best score, prefer N50 ---
-eligible = [r for r in rows if r["size_flag"] in ("ok", "size_unknown")] or rows
-best_score = eligible[0]["score"]
-tied = [r for r in eligible if best_score - r["score"] <= tie_band]
-tied.sort(key=lambda r: -r["n50"])
-winner = tied[0]
-if len(tied) > 1:
-    print(f"BUSCO scores within {tie_band} pp for {[r['name'] for r in tied]}; "
-          f"broke the tie on N50 -> {winner['name']}")
+def size_key(r):
+    return abs(r["dev"]) if r["dev"] is not None else float("inf")
+
+
+band.sort(key=lambda r: (size_key(r), -r["n50"]))
+winner = band[0]
+n_out = len(rows) - len(eligible)
+rule = f"{n_out} size outlier(s) ranked last; " if n_out else ""
+if len(band) == 1:
+    winner["decided_by"] = rule + "BUSCO completeness"
+elif len(band) > 1 and size_key(band[0]) == size_key(band[1]):
+    winner["decided_by"] = rule + f"BUSCO within {tie_band} pp, equal size: N50"
+else:
+    winner["decided_by"] = rule + f"BUSCO within {tie_band} pp: closest to the expected size"
+if len(band) > 1:
+    print(f"BUSCO C within {tie_band} pp for {[r['name'] for r in band]}; "
+          f"closest to the expected size ({expected:,.0f} bp) -> {winner['name']}")
+
+rest = sorted((r for r in rows if r is not winner),
+              key=lambda r: (r["size_flag"].startswith("SIZE_OUTLIER"), r not in band, size_key(r), -r["complete"]))
+rows = [winner] + rest
 
 with open("assembly_ranking.tsv", "w") as out:
-    out.write("assembler\tcomplete_pct\tduplicated_pct\tN50\ttotal_bp\tscore\t"
-              "size_check\tquast_contigs\tquast_largest_contig\tselected\n")
+    out.write("assembler\tcomplete_pct\tduplicated_pct\tN50\ttotal_bp\tsize_dev\t"
+              "size_check\tquast_contigs\tquast_largest_contig\tselected\tdecided_by\n")
     for r in rows:
         out.write("\t".join(str(x) for x in (
             r["name"], r["complete"], r["dup"], r["n50"], r["total"],
-            f"{r['score']:.2f}", r["size_flag"], r["quast_contigs"],
-            r["quast_largest"], "yes" if r is winner else "")) + "\n")
+            f"{r['dev']:+.3f}" if r["dev"] is not None else "NA", r["size_flag"], r["quast_contigs"],
+            r["quast_largest"], "yes" if r is winner else "", r["decided_by"])) + "\n")
 
 for r in rows:
     print(f"  {r['name']:<12} C={r['complete']:>6}% D={r['dup']:>5}% "
-          f"N50={r['n50']:>12,} size={r['total']:>12,} score={r['score']:>7.2f} {r['size_flag']}")
+          f"N50={r['n50']:>12,} size={r['total']:>12,} {r['size_flag']}")
 
 if winner["size_flag"].startswith("SIZE_OUTLIER"):
     sys.stderr.write(
@@ -151,4 +159,4 @@ if winner["size_flag"].startswith("SIZE_OUTLIER"):
 with open("best_assembler.txt", "w") as out:
     out.write(winner["name"])
 
-print(f"\nSelected best assembler: {winner['name']}")
+print(f"\nSelected best assembler: {winner['name']} ({winner['decided_by']})")
