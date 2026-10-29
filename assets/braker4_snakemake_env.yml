@@ -1,0 +1,12 @@
+# Snakemake environment that runs BRAKER4 (params.braker4_snakemake_env).
+#   mamba env create -p .conda_envs/braker4_snakemake -f assets/braker4_snakemake_env.yml
+# For --braker4_executor slurm add the SLURM executor plugin to this env:
+#   mamba install -p .conda_envs/braker4_snakemake -c bioconda snakemake-executor-plugin-slurm
+name: braker4_snakemake
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - snakemake=8.18.2
+  - pandas
