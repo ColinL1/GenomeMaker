@@ -165,6 +165,9 @@ workflow CORAL_GENOME_PIPELINE {
     def blast_db_path      = file(params.blast_db)
     def blast_taxdump_path = file(params.blast_taxdump ?: "${blast_db_path.getParent()}/new_taxdump")
     if (params.run_blobtools.toString().toBoolean() && !workflow.stubRun) {
+        if (!file("${blast_db_path}/core_nt.nal").exists()) {
+            error "BLASTN_NT needs the core_nt database folder: ${blast_db_path} has no core_nt.nal. Set --blast_db to the folder, not the prefix"
+        }
         if (!file("${blast_taxdump_path}/nodes.dmp").exists()) {
             error "BlobToolKit needs the NCBI new_taxdump folder: ${blast_taxdump_path} has no nodes.dmp. Set --blast_taxdump"
         }

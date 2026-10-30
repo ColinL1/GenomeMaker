@@ -141,7 +141,7 @@ Most defaults in `nextflow.config` point into a `config/` folder in the pipeline
 
 | Parameter | Content |
 |-----------|---------|
-| `--blast_db` | BLAST nucleotide database (e.g. `core_nt`) with `new_taxdump/` next to it |
+| `--blast_db` | Folder holding the `core_nt` BLAST database (`core_nt.nal`, `core_nt.00.*`, ...); `new_taxdump/` next to it unless `--blast_taxdump` is set |
 | `--diamond_db` | DIAMOND database of UniProt reference proteomes |
 | `--busco_offline_dir` | BUSCO lineage datasets (null = download) |
 | `--protein_refs` | Protein evidence for BRAKER4 (e.g. OrthoDB Metazoa) |
