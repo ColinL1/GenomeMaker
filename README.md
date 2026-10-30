@@ -53,17 +53,18 @@ flowchart LR
         A00["00 Read preprocessing"] --> A02c["02c QC of the assembly"]
     end
 
-    R02b --> M05["05 MitoHiFi: mito contigs removed"]
+    R02b --> M05["05 MitoHiFi: mito contigs removed<br/><i>run_mitogenome</i>"]
     A02c --> M05
-    M05 -.-> MITO["05 Mitogenome<br/>side branch"]
+    M05 -.-> MITO["05 Mitogenome<br/>side branch<br/><i>run_mitogenome</i>"]
 
     M05 --> P04["04 Medaka + polish QC gate<br/><i>run_polish</i>"]
-    P04 --> F03["03 BlobToolKit split<br/>host | symbiont bin | other"]
+    P04 --> F03["03 BlobToolKit split<br/>host | symbiont bin | other<br/><i>run_blobtools</i>"]
     F03 --> F03b["03b purge_dups on the host bin + purge QC gate<br/><i>run_purge_dups</i>"]
     F03b --> LF["Length filter >= 200 bp"]
     LF --> S03c["03c Contamination screens<br/>last step that changes bases<br/><i>run_screens</i>"]
-    S03c --> SC03d["03d RagTag <i>scaffold_reference</i><br/>then sort / rename"]
-    SC03d --> AN06["06 Repeats"] --> AN07["07 Gene models + 07c refinement"] --> AN08["08 Functional annotation"]
+    S03c --> RT["03d RagTag scaffolding<br/><i>scaffold_reference</i>"]
+    RT --> SORT["03d Sort / rename"]
+    SORT --> AN06["06 Repeats<br/><i>run_repeats</i>"] --> AN07["07 Gene models + 07c refinement<br/><i>run_structural_annotation</i>"] --> AN08["08 Functional annotation<br/><i>run_functional_annotation</i>"]
 
     AN08 --> SUM09["09 Summary + MultiQC<br/>run overview, gates, methods"]
     AN08 --> REL10["10 Product curation, table2asn, release QC gate<br/><i>run_release</i>"]
@@ -76,10 +77,10 @@ flowchart LR
     REL10 --> RELDIR
 
     classDef optional stroke-dasharray: 5 5
-    class REL10,RELDIR optional
+    class M05,MITO,P04,F03,F03b,S03c,RT,AN06,AN07,AN08,REL10,RELDIR optional
 ```
 
-Dashed boxes run only with `--run_release true`. Switches in *italics* skip a step; the assembly then passes through unchanged.
+Dashed boxes are optional; the name in *italics* is the switch that turns the step on or off. When an assembly step is off, the assembly passes through unchanged. RagTag runs only when `scaffold_reference` is set, and the release curation only with `run_release true`; the other optional steps are on by default.
 
 | Stage | Module | Description |
 |-------|--------|-------------|
