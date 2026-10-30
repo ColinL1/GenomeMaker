@@ -11,7 +11,6 @@ nextflow.enable.dsl = 2
 // ============================================================
 process PORECHOP {
     label 'reads_env'
-    label 'res_read_tool'
     tag   "porechop_${reads.simpleName}"
 
     conda 'bioconda::porechop'
