@@ -44,24 +44,42 @@ Two ways in, two ways out:
 - **Mode**: from ONT reads (stages 00 → 01 → 02 → 02b), or from an existing assembly with `--input_assembly` (00 → 02c). Both join at the mitochondrial-contig check; everything after is the same.
 - **Strategy**: *automatic* (default): every stage through functional annotation, written to `final/`; or *automatic + release curation* (`--run_release true`): the same, plus rule-based curation and the NCBI submission in `release_curation/<release_name>/`. `final/` is written in both strategies.
 
-```text
- MODE: from reads                                   MODE: --input_assembly
- 00 reads -> 01 k-mer size -> 02 assemblers -> 02b ranking      00 reads -> 02c QC of the assembly
-                       └──────────────────────┬──────────────────────┘
-                       05 MitoHiFi: mito contigs removed (rest of 05: the mitogenome, side branch)
-                       04 Medaka + polish QC gate                        (run_polish)
-                       03 BlobToolKit split: host | symbiont bin | other
-                       03b purge_dups on the host bin + purge QC gate    (run_purge_dups)
-                           length filter (>= 200 bp)
-                       03c contamination screens: last step that changes bases (run_screens)
-                       03d RagTag (scaffold_reference) -> sort / rename
-                       06 repeats -> 07 gene models (+07c refinement) -> 08 functional annotation
-                       └──────────────────────┬──────────────────────┘
-       STRATEGY automatic                     │          STRATEGY + release curation (run_release)
-       final/                                 │          10 product curation -> table2asn -> release QC gate
-                                              │          release_curation/<release_name>/   (and final/)
-                       09 summary + MultiQC (run overview, gates, methods), copied into both folders
+```mermaid
+flowchart LR
+    subgraph MODE_READS ["Mode: from reads"]
+        R00["00 Read preprocessing"] --> R01["01 k-mer genome size"] --> R02["02 Assemblers"] --> R02b["02b Ranking"]
+    end
+    subgraph MODE_ASM ["Mode: --input_assembly"]
+        A00["00 Read preprocessing"] --> A02c["02c QC of the assembly"]
+    end
+
+    R02b --> M05["05 MitoHiFi: mito contigs removed"]
+    A02c --> M05
+    M05 -.-> MITO["05 Mitogenome<br/>side branch"]
+
+    M05 --> P04["04 Medaka + polish QC gate<br/><i>run_polish</i>"]
+    P04 --> F03["03 BlobToolKit split<br/>host | symbiont bin | other"]
+    F03 --> F03b["03b purge_dups on the host bin + purge QC gate<br/><i>run_purge_dups</i>"]
+    F03b --> LF["Length filter >= 200 bp"]
+    LF --> S03c["03c Contamination screens<br/>last step that changes bases<br/><i>run_screens</i>"]
+    S03c --> SC03d["03d RagTag <i>scaffold_reference</i><br/>then sort / rename"]
+    SC03d --> AN06["06 Repeats"] --> AN07["07 Gene models + 07c refinement"] --> AN08["08 Functional annotation"]
+
+    AN08 --> SUM09["09 Summary + MultiQC<br/>run overview, gates, methods"]
+    AN08 --> REL10["10 Product curation, table2asn, release QC gate<br/><i>run_release</i>"]
+    REL10 --> SUM09
+    MITO -.-> SUM09
+    F03 -. symbiont bin .-> SUM09
+
+    SUM09 --> FINAL[("final/<br/>automatic strategy, always written")]
+    SUM09 --> RELDIR[("release_curation/#lt;release_name#gt;/<br/>with release curation")]
+    REL10 --> RELDIR
+
+    classDef optional stroke-dasharray: 5 5
+    class REL10,RELDIR optional
 ```
+
+Dashed boxes run only with `--run_release true`. Switches in *italics* skip a step; the assembly then passes through unchanged.
 
 | Stage | Module | Description |
 |-------|--------|-------------|
