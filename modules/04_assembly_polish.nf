@@ -54,7 +54,10 @@ process MEDAKA_POLISH {
     tag   "medaka_polish"
 
     conda 'bioconda::medaka'
-    container 'quay.io/biocontainers/medaka:2.2.2--py312h3050eb1_0'
+    // Custom image (docs/medaka_gpu.def): ONT's medaka 2.2.1 image with a CUDA torch;
+    // the ONT and biocontainer images ship a CPU-only torch. Runs on CPU too.
+    // binac2 profile: GPU node.
+    container "${params.medaka_container}"
     publishDir "${params.outdir}/04_polishing/medaka", mode: params.publish_mode
 
     input:
@@ -68,6 +71,14 @@ process MEDAKA_POLISH {
     script:
     def explicit_model = params.medaka_model ?: ''
     """
+    # On a GPU node (--nv binds nvidia-smi in; the task env does not carry CUDA_VISIBLE_DEVICES)
+    # medaka would fall back to CPU without an error
+    if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+        nvidia-smi -L
+        python -c "import torch, sys; print('torch', torch.__version__, 'CUDA', torch.version.cuda, 'GPU', torch.cuda.is_available()); sys.exit(0 if torch.cuda.is_available() else 1)" \\
+            || { echo "ERROR: GPU node, but torch in ${task.container} cannot use it" >&2; exit 1; }
+    fi
+
     if [ -n "${explicit_model}" ]; then
         MODEL="${explicit_model}"
         echo "Using explicit params.medaka_model: \$MODEL"
@@ -106,6 +117,19 @@ process MEDAKA_POLISH {
     # Validate BEFORE the expensive step. resolve_model errors out on an
     # unrecognised spec rather than quietly falling back to some default.
     medaka tools resolve_model --model "\$MODEL"
+
+    # medaka_consensus calls `medaka inference` without --bam_workers (default 2, which
+    # leaves the GPU idle: A30, 20 Mb, 127 s at 2 vs 35 s at 16), and medaka 2.2.1 dies on
+    # a short contig cuDNN rejects (bin/medaka_cudnn_retry.py). The exported function is
+    # picked up by medaka_consensus (a bash script); every other subcommand is unchanged.
+    medaka() {
+        if [ "\$1" = inference ]; then
+            python "\$(command -v medaka_cudnn_retry.py)" "\$@" --bam_workers ${params.medaka_bam_workers}
+        else
+            command medaka "\$@"
+        fi
+    }
+    export -f medaka
 
     medaka_consensus \\
       -i ${reads} \\
