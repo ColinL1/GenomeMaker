@@ -13,5 +13,6 @@ conf/porites.config
 conf/porites_binac2.config
 conf/porites_release_notes.md
 conf/*
+docs/*
 inputs
 db
