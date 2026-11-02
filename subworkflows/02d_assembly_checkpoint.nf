@@ -1,16 +1,7 @@
 // ============================================================
 // 02d_assembly_checkpoint.nf
 // Measure an assembly at a named point in the pipeline.
-//
-// WHY: purge_dups and BlobToolKit filtering both DELETE sequence. Before this,
-// nothing measured what they cost -- the next BUSCO ran after polishing, so a
-// filter that removed a third of the real genome was indistinguishable from one
-// that removed contamination. Running the same two tools at each checkpoint makes
-// the before/during/after series directly comparable in the MultiQC report, and
-// that series is what belongs in the methods section.
-//
-// Reuses BUSCO_ASSEMBLY and GFASTATS_QC rather than defining new processes; the
-// caller aliases this workflow per checkpoint so outputs stay distinct.
+// gfastats + BUSCO; the caller aliases this workflow per checkpoint.
 // ============================================================
 
 nextflow.enable.dsl = 2
@@ -20,7 +11,7 @@ include { BUSCO_ASSEMBLY; GFASTATS_QC } from '../modules/02_multi_assembler.nf'
 workflow ASSEMBLY_CHECKPOINT {
 
     take:
-        assembly        // value channel, single path
+        assembly
         checkpoint      // name used in every output filename, e.g. 'purged'
         busco_lineage
         busco_db_dir

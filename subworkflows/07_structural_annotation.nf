@@ -16,18 +16,14 @@ include { DIAMOND_BLASTP as DIAMOND_ALLVSALL ; DIAMOND_BLASTP as DIAMOND_SEGMENT
 // Workflow: STRUCTURAL_ANNOTATION
 // tRNAscan-SE → RNA-seq → STAR → BRAKER4 → AGAT merge
 //
-// RNA-seq handling: `rnaseq_dir` (a plain directory path, not a
-// channel) is used to build a channel of paired-end fastq tuples
-// via `channel.fromFilePairs`, one item per sample. RNASEQ_TRIM and
-// STAR_MAPPING are then forked/parallelized per-sample by Nextflow
-// itself (no in-process for-loop over libraries). The per-sample
-// STAR BAMs are collected and merged by a single MERGE_BAMS task.
+// RNASEQ_TRIM and STAR_MAPPING run per library (channel.fromFilePairs);
+// MERGE_BAMS merges the per-library BAMs.
 // ============================================================
 workflow STRUCTURAL_ANNOTATION {
 
     take:
         assembly
-        rnaseq_dir       // plain directory path containing *_R1.fastq.gz / *_R2.fastq.gz
+        rnaseq_dir       // directory of *_R1.fastq.gz / *_R2.fastq.gz
         protein_refs
         trimmomatic_adapters
         repeat_out       // RepeatMasker .out (repeat overlap filter for ncRNAs)
@@ -43,14 +39,10 @@ workflow STRUCTURAL_ANNOTATION {
         STAR_MAPPING(STAR_GENOME_INDEX.out.star_index_dir, RNASEQ_TRIM.out.trimmed_reads)
         MERGE_BAMS(STAR_MAPPING.out.sample_bam.collect())
 
-        // BRAKER4 takes the merged STAR BAM; it reads the transcript strand from the
-        // XS tags, so no strand split is needed (and it has no --stranded option).
         BRAKER4_RUN(assembly, MERGE_BAMS.out.rnaseq_bam, protein_refs)
         def ncrna_tblout = channel.empty()
         if (params.rfam_cm && file(params.rfam_cm).exists()) {
-            // Stage the DIRECTORY, not the .cm file: cmscan reads the cmpress
-            // indices (.i1f/.i1i/.i1m/.i1p) that sit next to it, and staging the
-            // single file would leave them behind.
+            // stage the directory: cmscan needs the cmpress indices next to the .cm
             INFERNAL_CMSCAN(
                 assembly,
                 channel.value(file(params.rfam_cm).parent),
@@ -65,9 +57,7 @@ workflow STRUCTURAL_ANNOTATION {
                      "or miRNA genes (these come from Rfam)."
         }
 
-        // ncRNAs/rRNAs enter the annotation BEFORE functional annotation, so they reach
-        // funannotate's GFF3, GenBank and NCBI TBL/SQN alike. Rfam family.txt types
-        // each family (Gene vs Cis-reg ...); placeholders when Rfam is not available.
+        // ncRNAs enter before functional annotation, so they reach every output format
         def rfam_family_ch = (params.rfam_family && file(params.rfam_family).exists())
             ? channel.value(file(params.rfam_family))
             : channel.value(file("${projectDir}/assets/NO_RFAM_FAMILY", checkIfExists: true))
@@ -78,21 +68,14 @@ workflow STRUCTURAL_ANNOTATION {
             rfam_family_ch
         )
 
-        // Strict GFF3 spec validation in its own container (GenomeTools is not in
-        // the AGAT image).
         GT_GFF3_VALIDATE(MERGE_ANNOTATIONS.out.gff3)
 
-        // GATE: everything downstream takes the merged GFF3 only once the validator
-        // has passed, so protein extraction and functional annotation never start on
-        // a GFF3 that fails validation. The file itself is unchanged (same path),
-        // only its release waits for the validation report.
+        // downstream starts only once the validator has passed
         def validated_gff3 = MERGE_ANNOTATIONS.out.gff3
             .combine(GT_GFF3_VALIDATE.out.report)
             .map { gff, _report -> gff }
 
-        // ---- Refinement (07c), BEFORE protein extraction: every consumer below
-        // (proteins, OMArk, StringTie, functional annotation, NCBI files) gets the
-        // refined, canonical model set.
+        // ---- Refinement (07c), before protein extraction
         TRNA_HC_FILTER(TRNASCAN_SE.out.trnascan_out, TRNASCAN_SE.out.trnascan_tbl)
         versions_ch = versions_ch.mix(TRNA_HC_FILTER.out.versions)
 
@@ -114,12 +97,12 @@ workflow STRUCTURAL_ANNOTATION {
             gap_tags = GAP_CLASSIFY.out.tags
         } else {
             log.warn "Gap-fusion scan SKIPPED (related_proteomes not set): gene models fused across " +
-                     "assembly gaps are neither tagged nor split"
+                        "assembly gaps are neither tagged nor split"
         }
 
         def transcript_edits = channel.value(file(params.transcript_edits ?: "${projectDir}/assets/NO_TRANSCRIPT_EDITS", checkIfExists: true))
         REFINE_GFF(braker_res, validated_gff3, assembly, TRNA_HC_FILTER.out.ids, repeat_out,
-                   haplotig_tags, gap_tags, transcript_edits)
+                    haplotig_tags, gap_tags, transcript_edits)
 
         // Isoform evidence filter: needs the related proteomes (homolog evidence)
         def models_gff3 = REFINE_GFF.out.gff
@@ -129,18 +112,17 @@ workflow STRUCTURAL_ANNOTATION {
             DIAMOND_ISOFORMS(ISOFORM_PREP.out.faa, GAP_SEGMENTS.out.refs)
             ISOFORM_BEDCOV(ISOFORM_PREP.out.bed, MERGE_BAMS.out.rnaseq_bam, MERGE_BAMS.out.rnaseq_bai)
             ISOFORM_FILTER(REFINE_GFF.out.gff, assembly, braker_res, DIAMOND_ISOFORMS.out.hits,
-                           ISOFORM_BEDCOV.out.cov, REFINE_GFF.out.splits)
+                            ISOFORM_BEDCOV.out.cov, REFINE_GFF.out.splits)
             models_gff3 = ISOFORM_FILTER.out.gff
             splits_ch = ISOFORM_FILTER.out.splits
             versions_ch = versions_ch.mix(DIAMOND_ISOFORMS.out.versions)
         } else {
             log.warn "Isoform evidence filter SKIPPED (related_proteomes=${params.related_proteomes}, " +
-                     "isoform_filter=${params.isoform_filter}): alternative isoforms are kept without an evidence check"
+                        "isoform_filter=${params.isoform_filter}): alternative isoforms are kept without an evidence check"
         }
         GT_VALIDATE_REFINED(models_gff3.mix(REFINE_GFF.out.pseudo))
 
-        // GATE as above: the refined GFF3 is released downstream only after both
-        // validations passed.
+        // downstream starts only once both validations passed
         def refined_gff3 = models_gff3
             .combine(GT_VALIDATE_REFINED.out.report.collect().map { _r -> 'validated' })
             .map { gff, _ok -> gff }
@@ -151,16 +133,13 @@ workflow STRUCTURAL_ANNOTATION {
         GFFREAD_UNREFINED(validated_gff3, assembly)
         PROTEIN_IDENTITY(EXTRACT_PROTEINS.out.proteins_faa, GFFREAD_UNREFINED.out.proteins, splits_ch)
 
-        // ---- Additive BRAKER4 steps: QC, ncRNA, transcript evidence ----
-        // Each optional step is skipped when its database is absent, rather than
-        // failing the run. See modules/07b_annotation_qc.nf for what braker.pl
-        // already covers and is therefore NOT duplicated here.
+        // ---- Annotation QC, ncRNA, transcript evidence (skipped when a database is absent)
         def compleasm_summary = channel.empty()
         if (params.run_compleasm.toString().toBoolean()) {
             COMPLEASM(assembly, params.busco_lineage,
-                      channel.value(params.compleasm_db
-                          ? file(params.compleasm_db)
-                          : file("${projectDir}/assets/NO_COMPLEASM_DB", checkIfExists: true)))
+                        channel.value(params.compleasm_db
+                            ? file(params.compleasm_db)
+                            : file("${projectDir}/assets/NO_COMPLEASM_DB", checkIfExists: true)))
             versions_ch = versions_ch.mix(COMPLEASM.out.versions)
             compleasm_summary = COMPLEASM.out.summary
         }
@@ -172,10 +151,10 @@ workflow STRUCTURAL_ANNOTATION {
             omark_out = OMARK.out.outdir
         } else {
             log.warn "OMArk SKIPPED (omamer_db=${params.omamer_db}). This matters: BRAKER is run " +
-                     "with --busco_lineage, which uses compleasm to pick the TSEBRA mode that " +
-                     "MAXIMISES BUSCO -- so its BUSCO score is optimised against the metric and " +
-                     "CANNOT be reported as an unbiased completeness figure. With OMArk off, " +
-                     "nothing independently measures annotation completeness or contamination."
+                        "with --busco_lineage, which uses compleasm to pick the TSEBRA mode that " +
+                        "MAXIMISES BUSCO -- so its BUSCO score is optimised against the metric and " +
+                        "CANNOT be reported as an unbiased completeness figure. With OMArk off, " +
+                        "nothing independently measures annotation completeness or contamination."
         }
 
         def stringtie_stats = channel.empty()
@@ -193,9 +172,9 @@ workflow STRUCTURAL_ANNOTATION {
             GT_GFF3_VALIDATE.out.versions)
 
     emit:
-        gff3     = refined_gff3                     // canonical (refined) models
-        proteins = EXTRACT_PROTEINS.out.proteins_faa
-        gff3_validation = GT_GFF3_VALIDATE.out.report
+        gff3             = refined_gff3                     // canonical (refined) models
+        proteins         = EXTRACT_PROTEINS.out.proteins_faa
+        gff3_validation  = GT_GFF3_VALIDATE.out.report
         refined_validation = GT_VALIDATE_REFINED.out.report
         trna_pseudogenes = REFINE_GFF.out.pseudo
         refine_splits    = splits_ch
@@ -203,12 +182,12 @@ workflow STRUCTURAL_ANNOTATION {
         refine_report    = REFINE_GFF.out.report
         protein_identity = PROTEIN_IDENTITY.out.report
         trna_hc          = TRNA_HC_FILTER.out.hc_out
-        star_logs       = STAR_MAPPING.out.star_log
-        compleasm       = compleasm_summary
-        omark           = omark_out
-        ncrna           = ncrna_tblout
-        stringtie       = stringtie_stats
-        trnascan_out    = TRNASCAN_SE.out.trnascan_out
-        braker_results  = BRAKER4_RUN.out.braker_results   // BRAKER4 QC (gene set, BUSCO, plots)
-        versions        = versions_ch
+        star_logs        = STAR_MAPPING.out.star_log
+        compleasm        = compleasm_summary
+        omark            = omark_out
+        ncrna            = ncrna_tblout
+        stringtie        = stringtie_stats
+        trnascan_out     = TRNASCAN_SE.out.trnascan_out
+        braker_results   = BRAKER4_RUN.out.braker_results   // BRAKER4 QC (gene set, BUSCO, plots)
+        versions         = versions_ch
 }

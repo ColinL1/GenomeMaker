@@ -199,10 +199,7 @@ table("stage03_blobtools_filter", "Taxonomic filter: category table",
       ["Category", "Scaffolds", "Span (bp)", "N50", "GC %", "Mean coverage"], rows,
       **PARENT_FILTERING)
 
-# blob + snail plots: still static PNGs (BlobToolKit's own renderer); per-scaffold
-# GC/coverage isn't exported by this pipeline stage, so they can't be re-plotted
-# natively. Side by side (each min 480px, so still readable) when there's room;
-# flex-wrap drops the second one to its own full-width row otherwise.
+# blob + snail plots: BlobToolKit's static PNGs, side by side when there is room.
 imgs = []
 for kind in ("blob.circle", "snail"):
     hit = find(f"*.{kind}.png")
@@ -216,9 +213,7 @@ if imgs:
          "snail plot (contiguity, composition, BUSCO), host-filtered scaffolds.",
          body, **PARENT_FILTERING)
 
-# Cumulative span: native linegraph from the scaffold id+length lists (host vs
-# symbiont — the finer Cnidaria/no-hit split used by the original PNG is not
-# recoverable without per-scaffold taxonomy, which isn't exported either).
+# Cumulative span: native linegraph from the scaffold id+length lists (host vs symbiont).
 def cumulative_series(path):
     lens = []
     if not os.path.exists(path):
@@ -236,12 +231,7 @@ def cumulative_series(path):
         points.append((i, cum))
     return decimate(points)
 
-# NOTE: pass [x, y] pairs, not a {x: y} dict. MultiQC's custom-content loader
-# tries to coerce dict-string-keys to float for sorting, but (at least in
-# MultiQC 1.33) the coerced result is assigned to the wrong variable and never
-# reaches the renderer, so string keys get sorted lexicographically ("10000"
-# before "2000") -> a zigzagging line instead of a smooth curve. Pairs avoid
-# that path entirely since the numbers are never stringified to begin with.
+# [x, y] pairs, not a {x: y} dict: MultiQC 1.33 sorts dict keys as strings.
 cum_data = {}
 for cat, fname in (("host", "host_scaffolds.tsv"), ("symbiont", "symbiont_scaffolds.tsv")):
     hit = find(fname)
@@ -293,10 +283,6 @@ PARENT_POLISHING = dict(
 table("stage04_merqury", "Merqury QV and k-mer completeness",
       "Consensus quality (QV) and k-mer completeness of the assembly before and after polishing (read k-mers: Q15 ONT).",
       ["Stage", "QV", "Error rate", "k-mer completeness %"], rows, **PARENT_POLISHING)
-# Note: the polish QC gate table (polish_qc_gate_mqc.tsv) is written by an earlier
-# pipeline step, not this script, so its parent_id can't be set from here. To fully
-# group "04 Polishing", add parent_id: 'stage04_polishing' (matching the id/name/
-# description above) to that step's own mqc-table header.
 
 # ---- 05 mitogenome: sequence source, protein check, liftover + MITOS2 annotation ----
 PARENT_MITO = dict(
@@ -483,10 +469,7 @@ table("stage06_barrnap", "rRNA genes (barrnap)",
       **PARENT_REPEATS)
 
 # ---- 07 Structural annotation (BRAKER4 + supporting tools) ----------------------
-# Everything in this stage - BRAKER4 itself plus the tools that feed or check it
-# (STAR, StringTie, compleasm, OMArk, tRNAscan-SE, Infernal, GFF3 validation) -
-# is grouped under one "07 Structural" nav entry so the report doesn't show a
-# dozen flat top-level items for a single pipeline stage.
+# Grouped under one "07 Structural" nav entry.
 PARENT_STRUCTURAL = dict(
     parent_id="stage07_structural", parent_name="07 Structural",
     parent_description="BRAKER4 gene prediction and its supporting/QC tools.")
@@ -522,8 +505,7 @@ if bs:
           ["Input", "Complete %", "Single %", "Duplicated %", "Fragmented %", "Missing %"], rows,
           **PARENT_STRUCTURAL)
 
-# Completeness plot (BUSCO genome/proteome + compleasm genome/proteome): native
-# 100%-stacked bargraph, same S/D/F/M categories/colours as the original PNG.
+# Completeness plot (BUSCO + compleasm, genome and proteome): 100%-stacked bargraph.
 SDFM_CATS = [
     {"name": "Single", "color": "#2271B2"},
     {"name": "Duplicated", "color": "#9FC5E8"},
@@ -562,13 +544,8 @@ plot("stage07_braker_completeness", "BRAKER4: completeness (BUSCO + compleasm)",
      "bargraph", {"ylab": "% of BUSCOs", "stacking": "relative"}, completeness_data,
      cats=SDFM_CATS, **PARENT_STRUCTURAL)
 
-# Transcript length distributions: computed directly from braker.gtf.gz (CDS
-# length = sum of CDS feature lengths per transcript; genomic span = CDS-bounded
-# range, matching how BRAKER's own gene_set_statistics.txt defines "genomic span").
-# Rendered as a linegraph, not a bargraph: that's the same convention MultiQC's
-# own FastQC module uses for its length-distribution histograms (see
-# fastqc.seq_length_dist_plot) - a fine-grained line reads as a histogram
-# silhouette, whereas bargraph draws gapped categorical bars that don't.
+# Transcript length distributions from braker.gtf.gz (CDS length; CDS-bounded genomic span),
+# drawn as linegraphs like MultiQC's FastQC length histograms.
 def histogram_points(values, bin_width, cap):
     """[(bin_start, count), ...], numeric x, sorted. Values above `cap` are
     pooled into the last point (so the x-axis doesn't stretch to one outlier).
@@ -612,9 +589,7 @@ if gtf:
          {"Transcripts": span_hist}, **PARENT_STRUCTURAL)
 
 # ---- 07 STAR alignment QC flag ---------------------------------------------------
-# The STAR module's own general-stats numbers have no pass/fail signal attached,
-# so a bad RNA-seq alignment rate (which directly weakens BRAKER's hints and the
-# StringTie assembly above) is easy to miss. Flag it explicitly per sample.
+# Flag a low RNA-seq alignment rate per sample (STAR's own stats have no pass/fail).
 star_rows = []
 for f in find("*_Log.final.out"):
     kv = {}
@@ -886,10 +861,8 @@ else:
               "Error, Reject, Fatal or Critical.", ["Code", "Level", "Count"], rows, **PARENT_RELEASE)
 
 # ---- 00 NanoPlot stats: give raw/trimmed files distinct names -------------------
-# Both NanoPlot runs write NanoStats.txt, so MultiQC saw one sample name twice and
-# silently kept only one ("Duplicate sample data found! Overwriting: NanoStats").
-# Copy each under a name carrying its read set; the originals are ignored via
-# fn_ignore_paths in multiqc_config.yaml.
+# Both NanoPlot runs write NanoStats.txt; copy each under its read-set name
+# (the originals are ignored via fn_ignore_paths in multiqc_config.yaml).
 for f in find("NanoStats*.txt"):
     parts = f.split(os.sep)
     src = next((p for p in parts if p.startswith("qc_nanoplot_")), None)

@@ -2,21 +2,8 @@
 // 09b_software_versions.nf
 // Collate the per-process versions.yml files into the report's software table.
 //
-// WHY PER-PROCESS CAPTURE, not parsing container tags out of the module files:
-//
-//   1. A container TAG can disagree with the tool it ships. Verified on this
-//      pipeline: `teambraker/braker3:v3.1.1` runs braker.pl **3.0.8**, and
-//      `nanostat:0.1.5` runs NanoStat **0.0.1**. Parsing tags would have put the
-//      wrong versions in the methods section.
-//   2. Under `-profile conda` there are no containers at all, so a tag-based
-//      approach reports nothing.
-//
-// Each process therefore runs its tool's own --version at runtime. Each command is
-// wrapped in `|| echo unknown` so a bad command degrades to "unknown" rather than
-// failing the task.
-//
-// The container is recorded ALONGSIDE the version, so the report carries both the
-// tool's self-reported version and the exact image it came from.
+// Versions come from each tool's own --version at runtime, not container tags
+// (tags can disagree with the tool they ship, and the conda profile has none).
 // ============================================================
 
 nextflow.enable.dsl = 2
@@ -25,10 +12,7 @@ process COLLATE_VERSIONS {
     label 'summary_env'
     tag   "collate_versions"
 
-    // collectFile writes its output to a new work/tmp/ directory on every run, so
-    // the default cache key (path + size + mtime) never matched and this task --
-    // and MULTIQC_FINAL after it -- re-ran on every -resume. 'deep' keys on the
-    // file's content instead.
+    // collectFile writes to a new path every run; 'deep' caches on content
     cache 'deep'
 
     conda 'conda-forge::python'
@@ -36,7 +20,7 @@ process COLLATE_VERSIONS {
     publishDir "${params.outdir}/summary", mode: params.publish_mode
 
     input:
-    path versions_file      // one concatenated file; see subworkflows/09_summary.nf
+    path versions_file
 
     output:
     path "software_versions_mqc.yaml", emit: mqc
@@ -48,8 +32,7 @@ process COLLATE_VERSIONS {
     #!/usr/bin/env python3
     import glob, html, os, re
 
-    # Minimal parser rather than a PyYAML dependency: the files this reads are
-    # written by this pipeline in a fixed two-level shape.
+    # files written by this pipeline in a fixed two-level shape: no PyYAML needed
     entries = {}
     proc, cur = None, {}
     for line in open("${versions_file}", errors="replace"):
@@ -108,7 +91,6 @@ process COLLATE_VERSIONS {
             out.write("    " + r + "\\n")
         out.write("    </tbody></table>\\n")
 
-    # Self-report, so this process appears in its own table.
     with open("versions.yml", "w") as out:
         out.write('"COLLATE_VERSIONS":\\n')
         out.write(f'    python: "{".".join(str(x) for x in __import__("sys").version_info[:3])}"\\n')

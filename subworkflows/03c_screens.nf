@@ -12,7 +12,7 @@ include { FCS_ADAPTOR ; VECSCREEN ; VECSCREEN_CLASSIFY ; FCS_GX ; SCREEN_REVIEW 
 workflow SCREEN_ASSEMBLY {
 
     take:
-        assembly        // value channel: host-filtered assembly
+        assembly
 
     main:
         def in_ch = assembly.map { f -> ['contigs', f] }

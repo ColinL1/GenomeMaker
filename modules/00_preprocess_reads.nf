@@ -218,17 +218,7 @@ process MULTIQC {
 // ============================================================
 // Process: CHOPPER_HQ_READS
 // High-quality read subset used ONLY for k-mer genome size estimation.
-//
-// WHY A SEPARATE PROCESS, not a third CHOPPER_SPLIT output: CHOPPER_SPLIT's
-// outputs feed purge_dups, the mitogenome stage and all of contamination
-// filtering, so touching its script invalidates the cache for most of the
-// pipeline. Deriving the k-mer read set here keeps that cache intact.
-//
-// WHY FILTER AT ALL: GenomeScope models a k-mer spectrum assuming most k-mers are
-// either genomic or clearly erroneous. Raw ONT error rates smear the error peak
-// into the homozygous peak, which inflates the apparent genome size. Restricting
-// to higher-quality reads sharpens both peaks. The estimate remains advisory for
-// a long-read-only dataset -- say so in methods.
+// ONT errors smear the error peak into the homozygous peak and inflate the size estimate.
 // ============================================================
 process CHOPPER_HQ_READS {
     label 'reads_env'
@@ -307,13 +297,8 @@ process CHOPPER_SPLIT {
         : "--contam ${symbiont_ref}"
     def half_cpus = Math.max(1, (task.cpus / 2) as int)
     """
-    # ONE decompression, tee'd into BOTH chopper streams, which run concurrently.
-    # The assembly stream reads from a FIFO in the background, so its exit status
-    # can be collected with `wait PID` (a >(...) process substitution cannot be).
-    #
-    # gzip -2 rather than the default -6: these are intermediate read sets that
-    # exist only to feed the assembler and the polisher, and this container ships
-    # no pigz/bgzip, so compression is single-threaded per stream.
+    # one decompression tee'd into both chopper streams; the assembly stream reads
+    # a FIFO in the background so its exit status can be collected with `wait`
     set -o pipefail
     mkfifo assembly_stream
     chopper -q 3 -l 1000 ${contam_opt} --threads ${half_cpus} < assembly_stream \\

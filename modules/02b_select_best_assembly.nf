@@ -14,9 +14,9 @@ process RANK_ASSEMBLIES {
     publishDir "${params.outdir}/02_assembly/selection", mode: params.publish_mode
 
     input:
-    path gfastats_reports    // ${name}.gfastats.txt  (name-embedded filenames)
-    path busco_summaries     // ${name}.${lineage}.short_summary.txt, HOST lineage only
-    path quast_reports       // ${name}_quast_report/ dirs
+    path gfastats_reports
+    path busco_summaries     // host lineage only
+    path quast_reports
     val  expected_genome_size
 
     output:

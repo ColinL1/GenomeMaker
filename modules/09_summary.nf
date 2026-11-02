@@ -13,9 +13,6 @@ process GENERATE_SUMMARY {
     label 'res_small_2h'
     tag   "generate_summary"
 
-    // Plain Python: the script uses only the standard library. The previous
-    // mulled pandas/jinja2 image is an R environment with no python3 at all
-    // ("env: can't execute 'python3'").
     conda 'conda-forge::python=3.12'
     container 'quay.io/biocontainers/python:3.12'
 
@@ -24,7 +21,7 @@ process GENERATE_SUMMARY {
     input:
     path gfastats_files
     path busco_files
-    path polish_files       // polishing-stage BUSCO short summaries + polish_decision.txt
+    path polish_files       // polishing BUSCO short summaries + polish_decision.txt
     path comparison_tsv
     path comparison_json
     path annotation_stats
@@ -38,15 +35,7 @@ process GENERATE_SUMMARY {
     script:
     """
     #!/usr/bin/env python3
-    # Produces a data-bearing plain-text summary.
-    #
-    # The previous version wrote a hardcoded heredoc whose every section said
-    # "(See assembly_comparison.tsv for details)" -- it contained no data at all,
-    # and was indented, so the output was indented too. It looked like a report
-    # without being one.
-    #
-    # MultiQC is the full interactive report; this is the quick terminal/methods
-    # read, generated from the same JSON MultiQC consumes.
+    # Plain-text summary from the same JSON MultiQC reads.
     import glob, json, os, re
 
     os.makedirs("summary", exist_ok=True)
@@ -140,7 +129,6 @@ process GENERATE_SUMMARY {
 
     open("summary/pipeline_report.txt", "w").write("\\n".join(lines) + "\\n")
 
-    # Carry the comparison tables through unchanged.
     import shutil
     for src, dst in (("${comparison_tsv}", "summary/assembly_comparison.tsv"),
                      ("${comparison_json}", "summary/assembly_comparison.json")):
@@ -151,8 +139,7 @@ process GENERATE_SUMMARY {
 
     print("\\n".join(lines))
 
-    # This script body is Python (see the shebang), so versions.yml is written
-    # here -- a bash heredoc at this point is a Python SyntaxError.
+    # Python script body: versions.yml written here
     import platform
     with open("versions.yml", "w") as v:
         v.write('"${task.process}":\\n')
@@ -219,18 +206,8 @@ process MULTIQC_CUSTOM_CONTENT {
 }
 
 // ============================================================
-// Process: MULTIQC
-// Aggregate every QC-producing step of the pipeline into a
-// single MultiQC report: read QC (pre-assembly), per-assembler
-// gfastats/QUAST/BUSCO, the post-polish BUSCO re-run, and
-// functional annotation stats (e.g. funannotate/InterProScan/
-// eggNOG summary json, if MultiQC-recognisable).
-//
-// This process is intentionally permissive about its inputs:
-// it just stages whatever files it is given into one directory
-// and lets `multiqc` auto-detect what it recognises. Missing or
-// empty optional channels (e.g. mitogenome/annotation not run)
-// are fine — MultiQC will simply report on what's present.
+// Process: MULTIQC_FINAL
+// One MultiQC report over every QC file given; absent optional stages are fine.
 // ============================================================
 process MULTIQC_FINAL {
     label 'res_tiny'

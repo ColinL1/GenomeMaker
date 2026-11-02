@@ -9,11 +9,7 @@ for f in glob.glob("*.gfastats.txt"):
     with open(f) as fh:
         for line in fh:
             line = line.strip()
-            # gfastats lines look like "Scaffold N50: 12759". Some values
-            # (e.g. "Base composition (A:C:G:T): 207962656:...") contain
-            # colons of their own, but only the real key/value separator is
-            # followed by a space, so split on ": " rather than the first
-            # bare colon.
+            # split on ": " (some values contain bare colons)
             if ": " not in line:
                 continue
             key, _, val = line.partition(": ")

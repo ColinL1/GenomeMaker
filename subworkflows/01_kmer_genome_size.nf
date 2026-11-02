@@ -2,17 +2,8 @@
 // 01_kmer_genome_size.nf
 // K-mer counting, histogram, and GenomeScope2 genome-size estimation.
 //
-// Split into TWO workflows on purpose:
-//
-//   MERYL_READ_DB     builds the read k-mer database. Needed by GenomeScope2
-//                     for genome sizing AND by Merqury for polishing QV, and
-//                     Merqury is wanted even on the --input_assembly path where
-//                     genome sizing is skipped entirely. Keeping the database
-//                     build separate means it can be built once and consumed by
-//                     either, instead of being trapped inside the sizing branch.
-//
-//   KMER_GENOME_SIZE  the GenomeScope2 model and the size parse, which only the
-//                     de novo assembly path needs.
+// MERYL_READ_DB is separate because Merqury needs it on the --input_assembly
+// path too, where genome sizing is skipped.
 // ============================================================
 
 nextflow.enable.dsl = 2
@@ -21,8 +12,7 @@ include { MERYL_COUNT; MERYL_HIST; GENOMESCOPE; PARSE_GENOME_SIZE } from '../mod
 
 // ============================================================
 // Workflow: MERYL_READ_DB
-// Read k-mer database + histogram. Consumed by GenomeScope2 (sizing) and
-// Merqury (polishing QV).
+// Read k-mer database + histogram
 // ============================================================
 workflow MERYL_READ_DB {
 
@@ -50,8 +40,6 @@ workflow KMER_GENOME_SIZE {
 
     main:
         GENOMESCOPE(meryl_hist)
-        // The empty-summary check lives inside GENOMESCOPE itself, so a failure
-        // aborts that task directly rather than via a channel subscriber.
         PARSE_GENOME_SIZE(GENOMESCOPE.out.genomescope_out)
 
     emit:

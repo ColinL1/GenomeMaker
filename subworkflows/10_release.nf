@@ -1,18 +1,16 @@
 // ============================================================
-// 10_release.nf (subworkflow): release curation (strategy 2)
-// The NCBI-ready release, from the finished assembly and its one annotation run:
-// product curation -> funannotate NCBI pass -> .tbl fixes -> table2asn preflight -> what table2asn
-// changed (.ecn, .fixedproducts) fed back into the curation and the .tbl -> table2asn (+ mitogenome),
-// release files synced to the submitted .tbl, high-confidence subset, symbiont BUSCO, summary.tsv,
-// QC gate (a FAIL stops the run), release folder <outdir>/release_curation/<release_name>/.
-// The released sequence is the final masked assembly as it is.
+// 10_release.nf (subworkflow): release curation
+// The NCBI-ready release, product curation -> funannotate NCBI pass -> .tbl fixes 
+// -> table2asn preflight -> what table2asn changed (.ecn, .fixedproducts) fed back into the curation
+// and the .tbl -> table2asn (+ mitogenome), release files synced to the submitted .tbl, 
+// high-confidence subset, symbiont BUSCO, summary.tsv, QC gate (a FAIL stops the run), release folder
 // ============================================================
 
 nextflow.enable.dsl = 2
 
 include { CURATE_PRODUCTS ; CURATE_PRODUCTS as CURATE_PRODUCTS_FINAL ; MAKE_FIX_FILES ; FUNANNOTATE_NCBI ;
-          FIX_TBL as FIX_TBL_PREFLIGHT ; FIX_TBL ; MITO_TBL ; TABLE2ASN as TABLE2ASN_PREFLIGHT ; TABLE2ASN ;
-          RELEASE_SETS ; SYMBIONT_BUSCO ; ANNOTATION_QC_GATE ; RELEASE_ASSEMBLE } from '../modules/10_release.nf'
+            FIX_TBL as FIX_TBL_PREFLIGHT ; FIX_TBL ; MITO_TBL ; TABLE2ASN as TABLE2ASN_PREFLIGHT ; TABLE2ASN ;
+            RELEASE_SETS ; SYMBIONT_BUSCO ; ANNOTATION_QC_GATE ; RELEASE_ASSEMBLE } from '../modules/10_release.nf'
 include { GENOME_SUMMARY as RELEASE_SUMMARY } from '../modules/09_summary.nf'
 
 // Placeholder for an absent optional input (assets/NO_*)
@@ -82,7 +80,7 @@ workflow RELEASE {
         CURATE_PRODUCTS('pass1', lookup_all, anno_pass1, pass1_fixed, draft, opt_file(params.product_cache, 'NO_PRODUCT_CACHE'), funannotate_db)
         MAKE_FIX_FILES(refined_gff, assembly, CURATE_PRODUCTS.out.curation)
         FUNANNOTATE_NCBI(refined_gff, assembly, eggnog, iprscan, phobius, funannotate_db,
-                         MAKE_FIX_FILES.out.fix, MAKE_FIX_FILES.out.remove, sbt)
+                            MAKE_FIX_FILES.out.fix, MAKE_FIX_FILES.out.remove, sbt)
         def anno_ch = FUNANNOTATE_NCBI.out.dir
 
         // ---- mitogenome (when Liftoff annotated it), in the same submission
@@ -92,13 +90,13 @@ workflow RELEASE {
 
         // ---- preflight: .tbl fixes, table2asn; what table2asn changed goes back into the curation and the .tbl
         FIX_TBL_PREFLIGHT('preflight', strip, anno_ch, refined_gff, no_file('NO_ECN'), no_file('NO_PRODUCT_CURATION'),
-                          no_file('NO_FIXEDPRODUCTS'))
+                            no_file('NO_FIXEDPRODUCTS'))
         TABLE2ASN_PREFLIGHT('preflight', FIX_TBL_PREFLIGHT.out.dir, t2a, sbt, cmt, mito_fsa, mito_tbl)
         def pre_ecn   = by_ext(TABLE2ASN_PREFLIGHT.out.files, '.ecn', 'NO_ECN')
         def pre_fixed = by_ext(TABLE2ASN_PREFLIGHT.out.files, '.fixedproducts', 'NO_FIXEDPRODUCTS')
         CURATE_PRODUCTS_FINAL('final', lookup_all, anno_pass1, fixedproducts.mix(pre_fixed).flatten().filter { f -> !f.name.startsWith('NO_') }
-                                  .collect().ifEmpty([no_file('NO_FIXEDPRODUCTS')]),
-                              draft, CURATE_PRODUCTS.out.cache, funannotate_db)
+                                    .collect().ifEmpty([no_file('NO_FIXEDPRODUCTS')]),
+                                draft, CURATE_PRODUCTS.out.cache, funannotate_db)
 
         // ---- the submission
         FIX_TBL('final', strip, anno_ch, refined_gff, pre_ecn, CURATE_PRODUCTS_FINAL.out.curation, pre_fixed)
@@ -106,7 +104,7 @@ workflow RELEASE {
 
         // ---- sets (synced to the submitted .tbl), symbiont BUSCO
         RELEASE_SETS(anno_ch, FIX_TBL.out.dir, TABLE2ASN.out.files.flatten().filter { f -> f.name.endsWith('.gbf') }.first(),
-                     refined_gff, refine_tags, refine_splits, FIX_TBL.out.rrna)
+                        refined_gff, refine_tags, refine_splits, FIX_TBL.out.rrna)
         def sets        = RELEASE_SETS.out.files.flatten()
         def rel_gff     = sets.filter { f -> f.name.endsWith('.gff3') && !f.name.contains('.hc.') && f.name != 'trna_pseudogenes.gff3' }.first()
         def sets_report = sets.filter { f -> f.name == 'release_sets_report.tsv' }.first()
@@ -139,7 +137,7 @@ workflow RELEASE {
             screen_files.collect().ifEmpty([no_file('NO_SCREEN_FILES')]), TABLE2ASN.out.files, sbt)
 
         def qc_files = ANNOTATION_QC_GATE.out.tsv.mix(RELEASE_SUMMARY.out.summary, refine_report, protein_identity,
-                                                       CURATE_PRODUCTS_FINAL.out.curation, screen_files, sym_summary, qv_file, busco_summary)
+                                                        CURATE_PRODUCTS_FINAL.out.curation, screen_files, sym_summary, qv_file, busco_summary)
             .flatten().filter { f -> !f.name.startsWith('NO_') }
         RELEASE_ASSEMBLE(ANNOTATION_QC_GATE.out.tsv, assembly, name_map, anno_ch, sets.mix(trna_pseudogenes).collect(),
             repeat_files.collect(), TABLE2ASN.out.files, mito_fasta.mix(mito_gff, mito_check).collect().ifEmpty([]),

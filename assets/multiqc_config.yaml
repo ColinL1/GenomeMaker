@@ -1,11 +1,7 @@
 # ============================================================
 # MultiQC configuration -- the integrated run report.
 #
-# Goal: ONE document that can be read top to bottom to assess everything a run
-# did, in the order the pipeline did it. Without an explicit module_order MultiQC
-# groups by tool, which scatters the assembly story across the page.
-#
-# Enable with:  --multiqc_config assets/multiqc_config.yaml
+# Sections follow the pipeline's stage order instead of being grouped by tool.
 # ============================================================
 
 title: "Coral Genome Assembly & Annotation"
@@ -19,11 +15,7 @@ intro_text: >
   release QC. The run overview at the top lists the automatic decisions; the methods
   are at the bottom. Sections absent from a given run belong to stages that were off.
 
-# ---- Read the pipeline's stages in order, not grouped by tool ----
-# module_order names the native MultiQC modules with their stage; the actual
-# position of EVERY section (native modules and the stageNN_* custom content
-# written by bin/multiqc_custom_content.py) is set by report_section_order below:
-# higher order = earlier in the report, stages 00 -> 09.
+# ---- Stage order: report_section_order below positions every section (higher = earlier) ----
 module_order:
   - fastqc:
       name: "00 Reads: FastQC (diagnostic only; NanoStat is the long-read QC)"
@@ -50,17 +42,9 @@ module_order:
       name: "07 Structural: RNA-seq alignment (STAR)"
       info: "RNA-seq alignment rate -- the transcript evidence BRAKER's gene models rest on."
 
-# NOTE: bin/multiqc_custom_content.py groups its sections by pipeline stage:
-#  - Every stageNN_* id below carries parent_id/parent_name/parent_description
-#    in its own file header, so they nest under one collapsible nav entry per
-#    stage. Giving the *parent* id its own order below positions the whole
-#    group; child order only matters within the group.
-#  - Every section sets its own section_name/description inline, so no
-#    custom_data overrides are needed.
-#  - IMPORTANT, found by testing: order sorts sections DESCENDING (higher =
-#    earlier) at the top level, but ASCENDING (lower = earlier) for children
-#    sharing a parent_id. The two blocks below use opposite numbering for
-#    exactly that reason - don't "fix" them to match without re-testing.
+# Custom-content sections nest under one parent per stage (parent_id in their headers).
+# Top-level order sorts DESCENDING (higher = earlier); children of a parent sort
+# ASCENDING. The two blocks below use opposite numbering on purpose.
 report_section_order:
   pipeline_summary:                   {order: 2000}
   genome_summary:                     {order: 1990}
@@ -120,9 +104,7 @@ report_section_order:
   methods:                            {order: -2000}
 
 # ---- File search patterns ----
-# The pipeline renames BUSCO summaries to <name>.<lineage>.short_summary.txt, which
-# the default BUSCO pattern (fn: short_summary*) never matched -- BUSCO was silently
-# absent from the report.
+# BUSCO summaries are renamed <name>.<lineage>.short_summary.txt
 sp:
   busco:
     fn: "*short_summary*.txt"
@@ -159,8 +141,7 @@ sample_names_replace:
   # RNA-seq libraries: "20230326_Por_GT_28_15_RNA-Seq_QCVTS..." -> "RNA-seq GT_28_15"
   "^\\d+_Por_([A-Z]+_\\d+_\\d+)_RNA-Seq_.*$": "RNA-seq \\1"
 
-# Both NanoPlot runs write NanoStats.txt (one overwrote the other). The formatting
-# step copies them as ONT_raw.* / ONT_trimmed.*; ignore the colliding originals.
+# Both NanoPlot runs write NanoStats.txt; the copies ONT_raw.* / ONT_trimmed.* are used instead.
 fn_ignore_paths:
   - "*qc_nanoplot_raw*"
   - "*qc_nanoplot_trimmed*"
@@ -228,10 +209,7 @@ table_cond_formatting_rules:
     fail: [{s_eq: "FAIL"}]
 
 # ---- One-line context under each section: what decision the stage feeds --------
-# Only for native/third-party modules, which have no description field of their
-# own. Every stageNN_* custom-content id already carries its own description
-# (set in bin/multiqc_custom_content.py), so adding a section_comment for those
-# too just repeats the same sentence twice on the page - don't add them back.
+# Native modules only: stageNN_* sections carry their own description.
 section_comments:
   fastqc: "Diagnostic only for long reads; does not gate anything."
   nanostat: "Read length/quality of the ONT data that every assembler and the polishing step consume."

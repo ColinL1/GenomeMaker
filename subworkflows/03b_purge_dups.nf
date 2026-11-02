@@ -9,8 +9,8 @@ include { PURGE_DUPS_COVERAGE; PURGE_DUPS_RUN } from '../modules/03b_purge_dups.
 workflow PURGE_DUPS {
 
     take:
-        assembly    // value channel, single path -- the host bin of the BlobToolKit split
-        reads       // ONT reads (assembly_reads)
+        assembly    // host bin of the BlobToolKit split
+        reads
 
     main:
         PURGE_DUPS_COVERAGE(assembly, reads)

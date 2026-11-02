@@ -19,7 +19,7 @@ process PURGE_DUPS_COVERAGE {
 
     input:
     path assembly
-    path reads   // ONT reads (assembly_reads)
+    path reads
 
     output:
     path "PB.base.cov", emit: base_cov
@@ -28,11 +28,7 @@ process PURGE_DUPS_COVERAGE {
     path "versions.yml", emit: versions
 
     script:
-    // Cutoffs: calcuts' automatic choice, unless params.purge_dups_transition is set.
-    // calcuts cannot place the haploid/diploid transition when the depth histogram
-    // has no valley between the two peaks (one merged peak); it must then be given
-    // (about 0.6x the depth peak). Lower/upper default to the automatic values.
-    // With the transition unset the script is the original one, so existing runs stay cached.
+    // Cutoffs: calcuts' automatic choice unless params.purge_dups_transition is set
     def calcuts_cmd = 'calcuts PB.stat > cutoffs'
     if (params.purge_dups_transition != null) {
         def lower = params.purge_dups_lower != null ? params.purge_dups_lower : '$(cut -f1 cutoffs_auto)'
@@ -98,7 +94,6 @@ process PURGE_DUPS_RUN {
     purge_dups -2 -T ${cutoffs} -c ${base_cov} split_self.paf.gz > dups.bed
 
     get_seqs -e dups.bed ${assembly}
-    # get_seqs writes purged.fa and hap.fa by default
     mv purged.fa purged.fasta
     mv hap.fa haplotigs.fasta
     

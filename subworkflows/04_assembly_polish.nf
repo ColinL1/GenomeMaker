@@ -1,19 +1,13 @@
 // ============================================================
 // 04_assembly_polish.nf
-// Medaka polishing of the contigs, before the BlobToolKit split, and the gate
-// that decides whether the polished contigs go on.
-//
-// The gate compares the raw Medaka output with its own input (same contigs, same
-// names), on Merqury QV and BUSCO; on a regression the unpolished contigs go on.
-// No Racon pre-step (see modules/04_assembly_polish.nf for the reasoning).
+// Medaka polishing of the contigs and the gate (Merqury QV + BUSCO, raw Medaka
+// output vs its input) that decides whether the polished contigs go on.
 // ============================================================
 
 nextflow.enable.dsl = 2
 
 include { MEDAKA_POLISH ; POLISH_QC_GATE } from '../modules/04_assembly_polish.nf'
 
-// Aliased so the same process can measure both ends of the stage without its
-// output filenames colliding -- each invocation gets its own `stage` label.
 include { BUSCO_FINAL as BUSCO_PREPOLISH  } from '../modules/04_assembly_polish.nf'
 include { BUSCO_FINAL as BUSCO_POSTPOLISH } from '../modules/04_assembly_polish.nf'
 include { MERQURY_QV  as MERQURY_PREPOLISH  } from '../modules/04_assembly_polish.nf'

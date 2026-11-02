@@ -1,7 +1,6 @@
 // ============================================================
 // 05_mitogenome.nf
-// Mitochondrial genome extraction by mapping assembly reads
-// to a reference mitogenome
+// Mitogenome: MitoHiFi contig or GetOrganelle assembly, polishing, annotation
 // ============================================================
 
 nextflow.enable.dsl = 2

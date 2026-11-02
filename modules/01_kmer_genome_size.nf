@@ -25,10 +25,7 @@ process MERYL_COUNT {
     path "versions.yml", emit: versions
 
     script:
-    // meryl defaults to ALL cores and ALL memory on the host, ignoring the
-    // scheduler's allocation -- under SLURM that oversubscribes the node and can
-    // get the job killed. threads=/memory= bind it to what Nextflow asked for.
-    // memory= is in GB.
+    // meryl otherwise uses every core and all memory on the host (memory= in GB)
     """
     meryl count \\
       k=${params.kmer_size} \\
@@ -120,8 +117,6 @@ process GENOMESCOPE {
     path "versions.yml", emit: versions
 
     script:
-    // GenomeScope2 from a container: it has the ploidy model a highly heterozygous
-    // coral needs, and takes no read-length argument.
     """
     awk 'BEGIN{OFS=" "}{print \$1, \$2}' ${meryl_hist} > kmer_db.meryl.hist.clean
 

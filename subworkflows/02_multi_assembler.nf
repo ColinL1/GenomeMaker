@@ -14,7 +14,7 @@ workflow MULTI_ASSEMBLER {
         necat_config
         necat_read_list
         genome_size
-        busco_lineage         // single lineage, e.g. anthozoa_odb12
+        busco_lineage
         necat_bin_dir
         busco_db_dir
 
@@ -63,18 +63,17 @@ workflow MULTI_ASSEMBLER {
         GFASTATS_QC(assemblies_ch)
         QUAST_QC(assemblies_ch)
 
-        // Aggregation: name-embedded filenames make plain path lists safe here.
         COMBINE_COMPARISON(
             GFASTATS_QC.out.gfastats_report.map { name, p -> p }.collect(),
             BUSCO_ASSEMBLY.out.busco_summary.map { name, p -> p }.collect()
         )
 
     emit:
-        assemblies      = assemblies_ch                          // (name, path)
-        gfastats         = GFASTATS_QC.out.gfastats_report       // (name, path) -- name preserved
-        busco_tables      = BUSCO_ASSEMBLY.out.busco_table         // (name, path) -- name preserved
-        busco_summary      = BUSCO_ASSEMBLY.out.busco_summary        // (name, path) -- used by SELECT_BEST_ASSEMBLY
-        quast_reports      = QUAST_QC.out.quast_report              // (name, path)
+        assemblies      = assemblies_ch                          
+        gfastats         = GFASTATS_QC.out.gfastats_report       
+        busco_tables      = BUSCO_ASSEMBLY.out.busco_table         
+        busco_summary      = BUSCO_ASSEMBLY.out.busco_summary        
+        quast_reports      = QUAST_QC.out.quast_report              
         comparison         = COMBINE_COMPARISON.out.comparison_tsv
         comparison_json    = COMBINE_COMPARISON.out.comparison_json
         versions           = versions_ch.mix(

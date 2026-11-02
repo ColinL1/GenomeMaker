@@ -28,7 +28,6 @@ process MITO_READ_FILTER {
 
     script:
     """
-    # Filter for quality >= 10 for mitogenome mapping
     ( set -o pipefail
       gunzip -c ${reads} \\
         | chopper -q 10 \\
@@ -76,10 +75,8 @@ process MITO_MAPPING {
 
     script:
     """
-    # Create minimap2 index for reference
     minimap2 -d mito_ref.mmi ${mito_ref}
 
-    # Map reads to mitogenome reference
     ( set -o pipefail
       minimap2 -ax map-ont mito_ref.mmi ${reads} \\
         | samtools sort -@ ${task.cpus} -O BAM -o mito_mapped.sorted.bam - )
@@ -158,11 +155,8 @@ process MITO_COVERAGE_STATS {
 // Recover the mitogenome from the assembly contigs, circularise,
 // rotate and annotate it (MitoHiFi contig mode, MITOS2 annotation).
 //
-// Takes the PRE-purge assembly: purge_dups removes the mito contig
-// as HIGHCOV, so it is absent from every later assembly.
-// MitoHiFi requires the related mitogenome as FASTA and GenBank. MITOS2
-// annotates de novo, so a feature-less GenBank written from the FASTA is
-// enough and no annotated reference is needed (MitoFinder would need one).
+// Takes the pre-purge assembly (purge_dups removes the mito contig as HIGHCOV).
+// MITOS2 annotates de novo, so a feature-less GenBank of the reference is enough.
 // ============================================================
 process MITOHIFI {
     label 'mito_env'
@@ -380,9 +374,7 @@ process MITO_MAPPED_READS {
 
 // ============================================================
 // Process: MITO_READS_HQ
-// Keep mito reads of mean quality >= params.mito_polish_min_q. Tested on this
-// dataset: Q19-Q21 reproduced the Illumina mitogenome exactly; lower cut-offs
-// kept both homopolymer errors, higher ones had too little depth.
+// Keep mito reads of mean quality >= params.mito_polish_min_q.
 // ============================================================
 process MITO_READS_HQ {
     label 'mito_env'
@@ -422,10 +414,9 @@ process MITO_READS_HQ {
 
 // ============================================================
 // Process: MITO_MEDAKA
-// Polish the ONT mitogenome with the high-quality mito reads. The model is
-// params.medaka_model, or read from the headers of the original ONT reads
-// exactly as MEDAKA_POLISH does (the mito reads come from a BAM and have
-// lost their header tags).
+// Polish the ONT mitogenome with the high-quality mito reads. Without
+// params.medaka_model, the model comes from the original ONT read headers
+// (the mito reads come from a BAM and have lost their tags).
 // ============================================================
 process MITO_MEDAKA {
     label 'mito_env'
@@ -665,8 +656,6 @@ process MITO_MITOS2 {
 // Process: MITO_GENE_CHECK
 // Translate every lifted CDS with the mitochondrial genetic code and compare
 // it to the reference protein: same length and no internal stop = OK.
-// This is the only self-check available without Illumina data; it cannot
-// see errors outside protein-coding genes.
 // ============================================================
 process MITO_GENE_CHECK {
     label 'mito_env'
