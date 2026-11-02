@@ -142,6 +142,15 @@ workflow CORAL_GENOME_PIPELINE {
     if (run_functional && !run_structural) {
         error "run_functional_annotation=true requires run_structural_annotation=true (it annotates the gene models)"
     }
+    if (run_functional) {
+        def absent = []
+        if (!funodb_path)   absent << "--funannotate_db (${params.funannotate_db})"
+        if (!eggnogdb_path) absent << "--eggnog_db (${params.eggnog_db})"
+        if (absent) {
+            error "run_functional_annotation=true, but these inputs do not exist: ${absent.join(', ')}. " +
+                    "Set them, or --run_functional_annotation false"
+        }
+    }
     // The release curation works on the finished annotation: structural and functional must run.
     def run_release = params.run_release.toString().toBoolean()
     if (run_release && !(run_structural && run_functional)) {
@@ -217,7 +226,7 @@ workflow CORAL_GENOME_PIPELINE {
     // Filled by optional stages for the MultiQC report
     def genomescope_out_ch = channel.empty()
     def quast_reports_ch   = channel.empty()
-    def repeat_summary_ch  = channel.empty()
+    def repeat_tbl_ch      = channel.empty()
     def star_logs_ch       = channel.empty()
     def gff3_validation_ch = channel.empty()
     def compleasm_ch       = channel.empty()
@@ -259,15 +268,12 @@ workflow CORAL_GENOME_PIPELINE {
             log.info "Using supplied genome_size=${params.genome_size}; skipping k-mer estimation"
             genome_size_est = channel.value(params.genome_size)
         }
-        else if (params.run_genomescope.toString().toBoolean()) {
+        else {
+            // run_genomescope=true here: the start-up check stops the run without either
             KMER_GENOME_SIZE(meryl_hist_ch)
             genome_size_est    = KMER_GENOME_SIZE.out.genome_size
             genomescope_out_ch = KMER_GENOME_SIZE.out.genomescope_out
             versions_ch        = versions_ch.mix(KMER_GENOME_SIZE.out.versions)
-        }
-        else {
-            log.warn "run_genomescope=false and no params.genome_size: assemblers will run without a genome-size hint"
-            genome_size_est = channel.value([])
         }
 
         // ===========================
@@ -571,9 +577,9 @@ workflow CORAL_GENOME_PIPELINE {
     if (params.run_repeats.toString().toBoolean()) {
         REPEATS_PIPELINE(final_assembly_ch)
         masked_assembly_ch = REPEATS_PIPELINE.out.masked_assembly
-        repeat_summary_ch  = REPEATS_PIPELINE.out.repeat_summary
-        repeat_out_ch      = REPEATS_PIPELINE.out.repeat_tbl     // RepeatMasker .out
-        repeat_files_ch    = REPEATS_PIPELINE.out.repeat_tbl.mix(REPEATS_PIPELINE.out.repeat_summary,
+        repeat_tbl_ch      = REPEATS_PIPELINE.out.repeat_tbl
+        repeat_out_ch      = REPEATS_PIPELINE.out.repeat_out
+        repeat_files_ch    = REPEATS_PIPELINE.out.repeat_out.mix(REPEATS_PIPELINE.out.repeat_tbl,
                                                                     REPEATS_PIPELINE.out.repeat_gff, REPEATS_PIPELINE.out.repeat_lib)
         report_files_ch    = report_files_ch.mix(REPEATS_PIPELINE.out.rrna_gff)
         versions_ch        = versions_ch.mix(REPEATS_PIPELINE.out.versions)
@@ -651,7 +657,7 @@ workflow CORAL_GENOME_PIPELINE {
         compleasm_ch.collect().ifEmpty([no_file('NO_FILE')]),
         CHECKPOINT_FINAL.out.busco_summary,
         final_qv_ch.collect().ifEmpty([no_file('NO_QV')]),
-        repeat_summary_ch.collect().ifEmpty([no_file('NO_FILE')]), 
+        repeat_tbl_ch.collect().ifEmpty([no_file('NO_FILE')]), 
         no_file('NO_FILE'),                                     
         mito_fasta_ch.collect().ifEmpty([no_file('NO_MITO_FASTA')]),
         mito_check_ch.collect().ifEmpty([no_file('NO_MITO_CHECK')]),
@@ -763,7 +769,7 @@ workflow CORAL_GENOME_PIPELINE {
         .mix(mito_coverage_ch)
         .mix(mito_flagstat_ch)
         // 06 -- repeat content
-        .mix(repeat_summary_ch)
+        .mix(repeat_tbl_ch)
         // 07 -- RNA-seq alignment rates and annotation validation
         .mix(star_logs_ch)
         .mix(gff3_validation_ch)
