@@ -22,8 +22,8 @@
 //   - MINIMAP2_ALIGN / SAMTOOLS_SORT_INDEX: coverage, split so minimap2
 //     and samtools each get their own container/conda env
 //   - BLOBTOOLS_CREATE / _ADD_HITS / _ADD_COV / _ADD_BUSCO: BlobDir build,
-//     chained by passing the BlobDir folder through as both input and
-//     output of each step (`blobtools add` modifies it in place)
+//     chained by passing the BlobDir from step to step; each add step copies
+//     it first (`blobtools add` edits the BlobDir it is given)
 //   - BLOBTOOLS_APPLY_FILTER: per-category filter + FASTA (host/symbiont),
 //     by automatic taxon filter or an optional manually exported JSON
 //   - PASSTHROUGH: no-op used when params.run_blobtools = false
@@ -548,7 +548,7 @@ process BLOBTOOLS_CREATE {
 
 // ============================================================
 // Process: BLOBTOOLS_ADD_HITS
-// Add BLASTN + DIAMOND taxonomy hits to the BlobDir (in place)
+// Add BLASTN + DIAMOND taxonomy hits to a copy of the BlobDir
 // ============================================================
 process BLOBTOOLS_ADD_HITS {
     label 'blobtools_env'
@@ -561,7 +561,7 @@ process BLOBTOOLS_ADD_HITS {
     // BLOBTOOLS_ADD_BUSCO -- the final state -- publishes it.
 
     input:
-    path btk
+    path btk_in, stageAs: 'btk_in'   // copied: `blobtools add` edits the BlobDir, and editing the upstream task's folder made -resume rerun this step
     path blastn_out
     path blastx_out
     path taxdump_dir
@@ -590,6 +590,7 @@ process BLOBTOOLS_ADD_HITS {
     # (20 hits @ bitscore 500 vs 5 @ 1500): --hit-count 10 -> Cnidaria,
     # --hit-count 25 -> Pseudomonadota. It changes filtering outcomes, so
     # it is a param rather than a hard-coded value.
+    cp -rL btk_in btk
     blobtools add \\
       --hits ${blastn_out} \\
       --hits ${blastx_out} \\
@@ -607,6 +608,7 @@ process BLOBTOOLS_ADD_HITS {
 
     stub:
     """
+    cp -rL btk_in btk
     echo "BLOBTOOLS_ADD_HITS stub completed"
     
     cat <<-END_VERSIONS > versions.yml
@@ -618,7 +620,7 @@ process BLOBTOOLS_ADD_HITS {
 
 // ============================================================
 // Process: BLOBTOOLS_ADD_COV
-// Add ONT coverage to the BlobDir (in place)
+// Add ONT coverage to a copy of the BlobDir
 // ============================================================
 process BLOBTOOLS_ADD_COV {
     label 'blobtools_env'
@@ -631,7 +633,7 @@ process BLOBTOOLS_ADD_COV {
     // BLOBTOOLS_ADD_BUSCO -- the final state -- publishes it.
 
     input:
-    path btk
+    path btk_in, stageAs: 'btk_in'   // copied: see BLOBTOOLS_ADD_HITS
     path cov_bam
     // The .bai is deliberately NOT staged: blobtools 4.4.4 builds its own
     // .csi index and deletes it afterwards, but if a .bai is present it
@@ -643,6 +645,7 @@ process BLOBTOOLS_ADD_COV {
 
     script:
     """
+    cp -rL btk_in btk
     blobtools add --cov ${cov_bam} btk
     
     cat <<-END_VERSIONS > versions.yml
@@ -654,6 +657,7 @@ process BLOBTOOLS_ADD_COV {
 
     stub:
     """
+    cp -rL btk_in btk
     echo "BLOBTOOLS_ADD_COV stub completed"
     
     cat <<-END_VERSIONS > versions.yml
@@ -665,7 +669,7 @@ process BLOBTOOLS_ADD_COV {
 
 // ============================================================
 // Process: BLOBTOOLS_ADD_BUSCO
-// Add BUSCO evidence to the BlobDir (in place) -- host-specific
+// Add BUSCO evidence to a copy of the BlobDir -- host-specific
 // lineage (e.g. anthozoa_odb12), flags host contigs unambiguously
 // ============================================================
 process BLOBTOOLS_ADD_BUSCO {
@@ -678,7 +682,7 @@ process BLOBTOOLS_ADD_BUSCO {
     publishDir "${params.outdir}/03_filtering/blobtools", mode: params.publish_mode
 
     input:
-    path btk
+    path btk_in, stageAs: 'btk_in'   // copied: see BLOBTOOLS_ADD_HITS
     path busco_table   // single BUSCO full_table.tsv, anthozoa_odb12
 
     output:
@@ -687,6 +691,7 @@ process BLOBTOOLS_ADD_BUSCO {
 
     script:
     """
+    cp -rL btk_in btk
     blobtools add --busco ${busco_table} btk
     
     cat <<-END_VERSIONS > versions.yml
@@ -698,6 +703,7 @@ process BLOBTOOLS_ADD_BUSCO {
 
     stub:
     """
+    cp -rL btk_in btk
     echo "BLOBTOOLS_ADD_BUSCO stub completed"
     
     cat <<-END_VERSIONS > versions.yml
