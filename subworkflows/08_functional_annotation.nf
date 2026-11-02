@@ -61,10 +61,6 @@ workflow FUNCTIONAL_ANNOTATION {
             pho_ch,
             funannotate_db
         )
-        // statistics from funannotate's own stats.json
-        def stats_json_ch = FUNANNOTATE_ANNOTATE.out.anno_dir
-            .map { d -> file("${d}/annotate_results/*.stats.json") }
-            .map { l -> l instanceof List ? l[0] : l }
 
         versions_ch = versions_ch.mix(
             EGGNOG_MAPPER.out.versions, FUNANNOTATE_ANNOTATE.out.versions)
@@ -72,7 +68,7 @@ workflow FUNCTIONAL_ANNOTATION {
     emit:
         anno_dir   = FUNANNOTATE_ANNOTATE.out.anno_dir
         fixedproducts = FUNANNOTATE_ANNOTATE.out.fixedproducts
-        stats_json = stats_json_ch
+        stats_json = FUNANNOTATE_ANNOTATE.out.stats_json
         eggnog     = EGGNOG_MAPPER.out.eggnog_anno
         iprscan    = ipr_ch
         phobius    = pho_ch

@@ -211,6 +211,7 @@ process FUNANNOTATE_ANNOTATE {
 
     output:
     path "final_anno", emit: anno_dir
+    path "final_anno/annotate_results/*.stats.json", emit: stats_json
     // product names tbl2asn rewrote, read by the release's product curation
     path "*.fixedproducts", emit: fixedproducts, optional: true
     path "versions.yml", emit: versions

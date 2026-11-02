@@ -706,8 +706,7 @@ workflow CORAL_GENOME_PIPELINE {
             compleasm_ch,
             screen_qc_ch
         )
-        stats_json_ch   = RELEASE.out.anno.map { d -> file("${d}/annotate_results/*.stats.json") }
-                                .map { l -> l instanceof List ? l[0] : l }
+        stats_json_ch   = RELEASE.out.stats_json
         summary_tsv_ch  = RELEASE.out.summary
         report_files_ch = report_files_ch.mix(RELEASE.out.anno, RELEASE.out.qc_gate,
                                                 RELEASE.out.ncbi.flatten().filter { f -> f.name.endsWith('.val') || f.name == 'in.stats' })

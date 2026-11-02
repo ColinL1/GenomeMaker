@@ -130,9 +130,8 @@ workflow RELEASE {
                         mito_check.ifEmpty(no_file('NO_MITO_CHECK')).first(), sym_summary)
 
         def final_proteins = anno_ch.map { d -> file("${d}/annotate_results/*.proteins.fa") }.map { l -> l instanceof List ? l[0] : l }
-        def stats_json     = anno_ch.map { d -> file("${d}/annotate_results/*.stats.json") }.map { l -> l instanceof List ? l[0] : l }
         ANNOTATION_QC_GATE(rel_gff, refined_gff, refine_report, protein_identity, sets_report, final_proteins,
-            refined_proteins, sets.filter { f -> f.name == 'id_map.tsv' }.first(), gt_reports.collect(), stats_json,
+            refined_proteins, sets.filter { f -> f.name == 'id_map.tsv' }.first(), gt_reports.collect(), FUNANNOTATE_NCBI.out.stats_json,
             RELEASE_SUMMARY.out.summary, name_map, agp, assembly, scaffold_input, repeat_lib, classify_report,
             screen_files.collect().ifEmpty([no_file('NO_SCREEN_FILES')]), TABLE2ASN.out.files, sbt)
 
@@ -144,10 +143,11 @@ workflow RELEASE {
             qc_files.unique { f -> f.name }.collect())
 
     emit:
-        anno     = anno_ch
-        summary  = RELEASE_SUMMARY.out.summary
-        ncbi     = TABLE2ASN.out.files
-        qc_gate  = ANNOTATION_QC_GATE.out.tsv
-        release  = RELEASE_ASSEMBLE.out.dir
-        versions = versions_ch
+        anno       = anno_ch
+        stats_json = FUNANNOTATE_NCBI.out.stats_json
+        summary    = RELEASE_SUMMARY.out.summary
+        ncbi       = TABLE2ASN.out.files
+        qc_gate    = ANNOTATION_QC_GATE.out.tsv
+        release    = RELEASE_ASSEMBLE.out.dir
+        versions   = versions_ch
 }

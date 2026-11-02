@@ -143,6 +143,7 @@ process FUNANNOTATE_NCBI {
 
     output:
     path "anno", emit: dir
+    path "anno/annotate_results/*.stats.json", emit: stats_json
     path "versions.yml", emit: versions
 
     script:
