@@ -32,6 +32,9 @@ include { RUN_SUMMARY ; methods_template } from './subworkflows/09_summary.nf'
 include { GENOME_SUMMARY ; METHODS ; FINAL_ASSEMBLE ; PUBLISH_MULTIQC } from './modules/09_summary.nf'
 include { SCREEN_ASSEMBLY }        from './subworkflows/03c_screens.nf'
 include { RAGTAG_SCAFFOLD ; SCAFFOLD_NAME_MAP } from './modules/03d_scaffold.nf'
+include { READS_TO_FASTA ; TGS_GAPFILL ; GAPFILL_AGP ; GAPFILL_REPORT } from './modules/03e_gapfill.nf'
+include { MEDAKA_POLISH as MEDAKA_GAPFILL } from './modules/04_assembly_polish.nf'
+include { GFASTATS_QC as GFASTATS_GAPFILL } from './modules/02_multi_assembler.nf'
 include { RELEASE }                from './subworkflows/10_release.nf'
 include { linkage_evidence ; ncbi_linkage_terms } from './modules/10_release.nf'
 
@@ -63,11 +66,11 @@ workflow CORAL_GENOME_PIPELINE {
         }
         if (params.ncbi_linkage_evidence && !(linkage_evidence() in ncbi_linkage_terms())) {
             error "ncbi_linkage_evidence '${params.ncbi_linkage_evidence}' is not an NCBI linkage-evidence term: " +
-                  ncbi_linkage_terms().join(', ')
+                    ncbi_linkage_terms().join(', ')
         }
         if (params.ncbi_species && params.ncbi_species.toString().contains('_')) {
             error "ncbi_species '${params.ncbi_species}' contains '_': use the organism name exactly as in the BioSample " +
-                  "(NCBI cannot resolve it otherwise, and the record loses its lineage)"
+                    "(NCBI cannot resolve it otherwise, and the record loses its lineage)"
         }
         if (!(params.ncbi_isolate || params.ncbi_strain)) {
             missing << '--ncbi_isolate or --ncbi_strain (NCBI requires one with a locus-tag prefix)'
@@ -75,7 +78,7 @@ workflow CORAL_GENOME_PIPELINE {
     }
     if (missing) {
         error "Missing settings: ${missing.join(', ')}.\n" +
-              "Set them, or switch the stage off (--run_screens false / --run_release false)."
+                "Set them, or switch the stage off (--run_screens false / --run_release false)."
     }
 
     def ont_reads_ch = channel.fromPath(params.ont_raw_reads, checkIfExists: true)
@@ -112,7 +115,7 @@ workflow CORAL_GENOME_PIPELINE {
     def run_mito = params.run_mitogenome.toString().toBoolean()
     if (run_mito && !mito_ref_path) {
         error "run_mitogenome=true needs --mito_ref (a related mitogenome FASTA); '${params.mito_ref}' does not exist. " +
-              "Set it, or --run_mitogenome false (the nuclear assembly is then not checked for mito contigs)"
+                "Set it, or --run_mitogenome false (the nuclear assembly is then not checked for mito contigs)"
     }
     def run_structural = params.run_structural_annotation.toString().toBoolean()
     if (run_structural) {
@@ -121,12 +124,12 @@ workflow CORAL_GENOME_PIPELINE {
         if (!protein_refs_path) absent << "--protein_refs (${params.protein_refs})"
         if (absent) {
             error "run_structural_annotation=true, but these inputs do not exist: ${absent.join(', ')}. " +
-                  "Set them, or --run_structural_annotation false"
+                    "Set them, or --run_structural_annotation false"
         }
         // BRAKER runs with --softmasking and needs the repeat-softmasked assembly from stage 06.
         if (!params.run_repeats.toString().toBoolean()) {
             error "run_structural_annotation=true requires run_repeats=true: BRAKER runs with --softmasking " +
-                  "and needs the repeat-softmasked assembly stage 06 produces"
+                    "and needs the repeat-softmasked assembly stage 06 produces"
         }
         // BRAKER4 lives outside the repository (README.md "BRAKER4 setup"); stub runs do not call it
         if (!workflow.stubRun) {
@@ -154,6 +157,9 @@ workflow CORAL_GENOME_PIPELINE {
     if (run_release && !(run_structural && run_functional)) {
         error "run_release=true requires run_structural_annotation=true and run_functional_annotation=true"
     }
+    // Gap filling runs on the RagTag scaffolds: on with RagTag unless run_gapfill=false, off without RagTag
+    def run_gapfill = params.run_gapfill.toString().toBoolean() && (params.scaffold_reference as boolean)
+    def run_gapfill_polish = run_gapfill && params.run_gapfill_polish.toString().toBoolean()
 
     // Reference DBs / bundled helper scripts referenced by absolute host path
     // inside container script blocks. These MUST be declared as Nextflow
@@ -526,11 +532,54 @@ workflow CORAL_GENOME_PIPELINE {
     def scaffolds_ch = screened_ch
     def agp_ch       = channel.value(file("${projectDir}/assets/NO_AGP", checkIfExists: true))
     def name_map_ch  = channel.value(file("${projectDir}/assets/NO_NAME_MAP", checkIfExists: true))
+    // the sequence the release check compares the released FASTA with (N runs split it into segments)
+    def scaffold_input_ch = screened_ch
+    def gapfill_mqc_ch    = channel.empty()
     if (params.scaffold_reference) {
         RAGTAG_SCAFFOLD(screened_ch, file(params.scaffold_reference, checkIfExists: true))
         scaffolds_ch = RAGTAG_SCAFFOLD.out.scaffolds
         agp_ch       = RAGTAG_SCAFFOLD.out.agp
         versions_ch  = versions_ch.mix(RAGTAG_SCAFFOLD.out.versions)
+    }
+
+    // ===========================
+    // 03e. GAP FILLING (params.run_gapfill): TGS-GapCloser --ne on the RagTag scaffolds with the
+    // porechopped reads, then a second Medaka pass (run_gapfill_polish) with the polishing reads.
+    // No gate: the result goes on. Not screened again: a fill lies between two screened contigs,
+    // from a read aligned to both. The AGP is rebuilt from the N runs left; the release check and
+    // the name map use the gap-filled scaffolds.
+    // ===========================
+    if (run_gapfill) {
+        READS_TO_FASTA(porechopped_ch)
+        TGS_GAPFILL(RAGTAG_SCAFFOLD.out.scaffolds, READS_TO_FASTA.out.fasta)
+        def gapfilled_ch = TGS_GAPFILL.out.scaffolds
+        versions_ch = versions_ch.mix(READS_TO_FASTA.out.versions, TGS_GAPFILL.out.versions)
+
+        def gapfill_stats_in = RAGTAG_SCAFFOLD.out.scaffolds.map { f -> ['gapfill_ragtag', f] }
+            .mix(TGS_GAPFILL.out.scaffolds.map { f -> ['gapfill_tgs', f] })
+        if (run_gapfill_polish) {
+            MEDAKA_GAPFILL(TGS_GAPFILL.out.scaffolds, polish_reads)
+            gapfilled_ch = MEDAKA_GAPFILL.out.medaka_assembly
+            gapfill_stats_in = gapfill_stats_in.mix(gapfilled_ch.map { f -> ['gapfill_medaka', f] })
+            versions_ch = versions_ch.mix(MEDAKA_GAPFILL.out.versions)
+        }
+        gapfilled_ch = gapfilled_ch.first()
+
+        GAPFILL_AGP(gapfilled_ch, RAGTAG_SCAFFOLD.out.agp)
+        GFASTATS_GAPFILL(gapfill_stats_in)
+        def gapfill_stats = GFASTATS_GAPFILL.out.gfastats_report
+        GAPFILL_REPORT(
+            TGS_GAPFILL.out.detail,
+            RAGTAG_SCAFFOLD.out.agp,
+            gapfill_stats.filter { n, _f -> n == 'gapfill_ragtag' }.map { _n, f -> f },
+            gapfill_stats.filter { n, _f -> n == 'gapfill_tgs' }.map { _n, f -> f },
+            gapfill_stats.filter { n, _f -> n == 'gapfill_medaka' }.map { _n, f -> f }.ifEmpty(no_file('NO_FILE'))
+        )
+        scaffolds_ch      = gapfilled_ch
+        scaffold_input_ch = gapfilled_ch
+        agp_ch            = GAPFILL_AGP.out.agp
+        gapfill_mqc_ch    = GAPFILL_REPORT.out.mqc
+        versions_ch = versions_ch.mix(GAPFILL_AGP.out.versions, GFASTATS_GAPFILL.out.versions, GAPFILL_REPORT.out.versions)
     }
     FUNANNOTATE_SORT(scaffolds_ch, params.scaffold_basename)
     def final_assembly_ch = FUNANNOTATE_SORT.out.final_assembly
@@ -666,7 +715,7 @@ workflow CORAL_GENOME_PIPELINE {
             masked_assembly_ch,
             name_map_ch,
             agp_ch,
-            screened_ch,
+            scaffold_input_ch,
             gff3_ch,
             STRUCTURAL_ANNOTATION.out.refine_splits,
             STRUCTURAL_ANNOTATION.out.refine_tags,
@@ -694,10 +743,10 @@ workflow CORAL_GENOME_PIPELINE {
             screen_qc_ch
         )
         stats_json_ch   = RELEASE.out.anno.map { d -> file("${d}/annotate_results/*.stats.json") }
-                              .map { l -> l instanceof List ? l[0] : l }
+                                .map { l -> l instanceof List ? l[0] : l }
         summary_tsv_ch  = RELEASE.out.summary
         report_files_ch = report_files_ch.mix(RELEASE.out.anno, RELEASE.out.qc_gate,
-                                              RELEASE.out.ncbi.flatten().filter { f -> f.name.endsWith('.val') || f.name == 'in.stats' })
+                                                RELEASE.out.ncbi.flatten().filter { f -> f.name.endsWith('.val') || f.name == 'in.stats' })
         versions_ch     = versions_ch.mix(RELEASE.out.versions)
         // An empty upstream channel would skip the gate and the folder without failing the run.
         RELEASE.out.release.ifEmpty { error "The release was not built: an input of the QC gate or the release folder was empty" }
@@ -706,8 +755,9 @@ workflow CORAL_GENOME_PIPELINE {
 
     // ---- methods text: the steps that ran, their versions and the automatic decisions
     def methods_tpl_ch = channel.of(methods_template([input_assembly: use_input_assembly, mito: run_mito,
-                                                      structural: run_structural, functional: run_functional,
-                                                      release: run_release]))
+                                                        structural: run_structural, functional: run_functional,
+                                                        release: run_release, gapfill: run_gapfill,
+                                                        gapfill_polish: run_gapfill_polish]))
         .collectFile(name: 'methods_template.md', newLine: true)
     METHODS(
         methods_tpl_ch,
@@ -749,6 +799,8 @@ workflow CORAL_GENOME_PIPELINE {
         .mix(purged_busco_ch)
         .mix(purged_gfastats_ch)
         .mix(purge_gate_mqc_ch)
+        // 03e -- gap filling: gaps, joins, fills and contig N50 after each step
+        .mix(gapfill_mqc_ch)
         // final assembly: the delivered product
         .mix(CHECKPOINT_FINAL.out.busco_summary)
         .mix(CHECKPOINT_FINAL.out.gfastats)
@@ -773,7 +825,7 @@ workflow CORAL_GENOME_PIPELINE {
         .mix(stats_json_ch.filter { it })
 
     // Run facts for the MultiQC run overview (mode, strategy, switches)
-    def run_facts_ch = channel.of([
+    def run_facts_ch = channel.of(([
             "mode\t${use_input_assembly ? 'from assembly (--input_assembly)' : 'from reads'}",
             "strategy\t${run_release ? 'automatic + release curation' : 'automatic'}",
             "mitogenome\t${run_mito ? 'on' : 'off'}",
@@ -783,10 +835,12 @@ workflow CORAL_GENOME_PIPELINE {
             "purge_dups\t${run_purge ? 'on' : 'off'}",
             "screens\t${params.run_screens.toString().toBoolean() ? 'on' : 'off'}",
             "ragtag\t${params.scaffold_reference ? 'on' : 'off'}",
+            "gapfill\t${run_gapfill ? 'on' : 'off'}",
+        ] + (run_gapfill ? ["gapfill_polish\t${run_gapfill_polish ? 'on' : 'off'}"] : []) + [
             "repeats\t${params.run_repeats.toString().toBoolean() ? 'on' : 'off'}",
             "structural_annotation\t${run_structural ? 'on' : 'off'}",
             "functional_annotation\t${run_functional ? 'on' : 'off'}",
-        ].join('\n')).collectFile(name: 'run_facts.tsv', newLine: true)
+        ]).join('\n')).collectFile(name: 'run_facts.tsv', newLine: true)
     report_files_ch = report_files_ch.mix(run_facts_ch)
 
     RUN_SUMMARY(

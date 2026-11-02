@@ -63,7 +63,8 @@ flowchart LR
     F03b --> LF["Length filter >= 200 bp"]
     LF --> S03c["03c Contamination screens<br/>last step that changes bases<br/><i>run_screens</i>"]
     S03c --> RT["03d RagTag scaffolding<br/><i>scaffold_reference</i>"]
-    RT --> SORT["03d Sort / rename"]
+    RT --> GF["03e TGS-GapCloser + Medaka<br/><i>run_gapfill</i>"]
+    GF --> SORT["03d Sort / rename"]
     SORT --> AN06["06 Repeats<br/><i>run_repeats</i>"] --> AN07["07 Gene models + 07c refinement<br/><i>run_structural_annotation</i>"] --> AN08["08 Functional annotation<br/><i>run_functional_annotation</i>"]
 
     AN08 --> SUM09["09 Summary + MultiQC<br/>run overview, gates, methods"]
@@ -77,10 +78,10 @@ flowchart LR
     REL10 --> RELDIR
 
     classDef optional stroke-dasharray: 5 5
-    class M05,MITO,P04,F03,F03b,S03c,RT,AN06,AN07,AN08,REL10,RELDIR optional
+    class M05,MITO,P04,F03,F03b,S03c,RT,GF,AN06,AN07,AN08,REL10,RELDIR optional
 ```
 
-Dashed boxes are optional; the name in *italics* is the switch that turns the step on or off. When an assembly step is off, the assembly passes through unchanged. RagTag runs only when `scaffold_reference` is set, and the release curation only with `run_release true`; the other optional steps are on by default.
+Dashed boxes are optional; the name in *italics* is the switch that turns the step on or off. When an assembly step is off, the assembly passes through unchanged. RagTag runs only when `scaffold_reference` is set, gap filling runs with RagTag (switch off with `run_gapfill false`), and the release curation only with `run_release true`; the other optional steps are on by default.
 
 | Stage | Module | Description |
 |-------|--------|-------------|
@@ -95,6 +96,7 @@ Dashed boxes are optional; the name in *italics* is the switch that turns the st
 | **03b** | `03b_purge_dups` | purge_dups on the host bin; the purge QC gate (BUSCO before/after) stops the run when it removes BUSCO genes; length filter |
 | **03c** | `03c_screens` | NCBI contamination screens: FCS-adaptor, VecScreen (UniVec), FCS-GX; unclear hits are reviewed before actions are applied |
 | **03d** | `03d_scaffold` | Optional RagTag scaffolding, then sort and rename (`scaffold_1..N`); with RagTag, the scaffold name map |
+| **03e** | `03e_gapfill` | Optional gap filling of the RagTag scaffolds: TGS-GapCloser `--ne` with the porechopped reads, then a second Medaka pass; no gate. AGP rebuilt from the gaps left; MultiQC table of gaps, joins, fills and contig N50 per step |
 | **06** | `06_repeats` | RepeatModeler + EDTA library, RepeatClassifier for unknown families, RepeatMasker soft-masking, barrnap rRNA |
 | **07** | `07_structural_annotation` | RNA-seq trimming and STAR mapping, BRAKER4 gene prediction, tRNAscan-SE, Infernal/Rfam ncRNAs, StringTie, AGAT merge and GFF3 validation, compleasm and OMArk |
 | **07c** | `07c_annotation_refine` | Gene-model refinement: UTRs, gene membership, tRNA/ncRNA filters, haplotig and gap-fusion scans, isoform filter, protein identity check |
@@ -260,6 +262,10 @@ The full list, with comments, is in `nextflow.config`. The most used ones:
 | `--auto_filter` | `true` | Automatic best-hit taxon filter |
 | `--filter_json` | `null` | Manual selection exported from the BlobToolKit Viewer, used instead of the automatic filter |
 | `--scaffold_reference` | `null` | Reference genome for RagTag; null = no scaffolding |
+| `--run_gapfill` | `true` | 03e gap filling of the RagTag scaffolds; runs only with `--scaffold_reference` (RagTag), off without it |
+| `--gapfill_min_nread` | `1` | TGS-GapCloser `--min_nread` |
+| `--run_gapfill_polish` | `true` | Medaka on the gap-filled scaffolds (MEDAKA_GAPFILL) |
+| `--resource_gapfill_cpus`, `--resource_gapfill_memory`, `--resource_gapfill_time` | `32`, `200.GB`, `4.h` | TGS_GAPFILL resources |
 | `--medaka_model` | `null` | Medaka model; null = read from the ONT read headers |
 
 ### Annotation
@@ -385,6 +391,7 @@ outdir/
 ├── 03b_purge_dups/                  # purged assembly, haplotigs, cutoffs; qc/ purge gate; length_filter/
 ├── 03c_screens/contigs/             # FCS-adaptor, VecScreen, FCS-GX, review and actions
 ├── 03d_scaffolding/                 # RagTag scaffolds and AGP; sorted/ final assembly and name map
+├── 03e_gapfill/                     # gap-filled AGP; tgsgapcloser/, medaka/, qc/ gfastats and gapfill table
 ├── 06_repeats/  07_structural_annotation/  08_functional_annotation/
 ├── 10_release_curation/             # intermediate release files (with --run_release)
 ├── summary/

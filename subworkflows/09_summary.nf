@@ -16,7 +16,7 @@ include { linkage_evidence }               from '../modules/10_release.nf'
 // Methods template of the run: one line per step that ran, with the settings it used.
 // {{tool}} becomes the version the run recorded and {{=result}} a sentence read from the
 // decision files (bin/methods.py, process METHODS); no result is written here.
-// run: [input_assembly, mito, structural, functional, release] -- what main.nf decided.
+// run: [input_assembly, mito, structural, functional, release, gapfill, gapfill_polish] -- what main.nf decided.
 def base_name(f) {
     return file(f.toString()).name
 }
@@ -70,13 +70,19 @@ def methods_template(Map run) {
     if (params.run_screens.toString().toBoolean()) {
         lines << "- Contamination screens: FCS-adaptor {{fcs-adaptor}} (--euk), VecScreen (UniVec_Core, BLAST {{blast}}) and FCS-GX {{fcs-gx}} " +
                  "(tax-id ${params.taxon_id}) on the contigs; unclear hits reviewed (`screen_review.tsv`); {{=screen}}. " +
-                 "Later steps add scaffold gaps and rename sequences only."
+                 (run.gapfill ? "Later steps add scaffold gaps, fill gaps and rename sequences." : "Later steps add scaffold gaps and rename sequences only.")
     } else {
         lines << "- Contamination screens: not run (run_screens=false)."
     }
     if (params.scaffold_reference) {
         lines << "- Scaffolding: RagTag {{ragtag}} `scaffold` against `${base_name(params.scaffold_reference)}`" +
                  (params.ragtag_infer_gaps.toString().toBoolean() ? ' (gap sizes inferred)' : ' (100 bp gaps of unknown size)') + '.'
+    }
+    if (run.gapfill) {
+        lines << "- Gap filling: TGS-GapCloser {{tgsgapcloser}} (--ne, --tgstype ont, --min_nread ${params.gapfill_min_nread}) on the RagTag scaffolds " +
+                 "with the adapter-trimmed ONT reads" +
+                 (run.gapfill_polish ? "; the gap-filled scaffolds polished with Medaka {{medaka}} using the polishing reads" : '') +
+                 "; AGP rebuilt from the gaps left."
     }
     lines << "- Naming: sequences sorted by length and renamed ${params.scaffold_basename}_1..N (funannotate sort {{funannotate}})."
     if (run.mito) {
