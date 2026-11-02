@@ -45,7 +45,7 @@ Two ways in, two ways out:
 - **Strategy**: *automatic* (default): every stage through functional annotation, written to `final/`; or *automatic + release curation* (`--run_release true`): the same, plus rule-based curation and the NCBI submission in `release_curation/<release_name>/`. `final/` is written in both strategies.
 
 ```mermaid
-flowchart LR
+flowchart TD
     subgraph MODE_READS ["Mode: from reads"]
         R00["00 Read preprocessing"] --> R01["01 k-mer genome size"] --> R02["02 Assemblers"] --> R02b["02b Ranking"]
     end
@@ -134,6 +134,7 @@ nextflow -v
 | Phobius | `--phobius_dir` | Licence-restricted; install from the licensed tarball, or `--run_phobius false` |
 | InterProScan data | `--interproscan_data` | Must match the release of `--interproscan_container` (default `interpro/interproscan:5.73-104.0`) |
 | FCS-adaptor / FCS-GX | `--fcs_adaptor_image`, `--fcs_gx_image` | NCBI `.sif` images, run with `apptainer exec` |
+| Medaka (GPU) | `--medaka_container` | `.sif` built from `docs/medaka_gpu.def` (ONT medaka 2.2.1 + CUDA torch), default `db/medaka_images/medaka-2.2.1-cuda128.sif`; the binac2 profile runs it on one GPU of the `gpu` partition |
 | table2asn | `--table2asn` | NCBI Linux binary, for the release stage only |
 
 ### BRAKER4 setup
@@ -267,6 +268,16 @@ The full list, with comments, is in `nextflow.config`. The most used ones:
 | `--run_gapfill_polish` | `true` | Medaka on the gap-filled scaffolds (MEDAKA_GAPFILL) |
 | `--resource_gapfill_cpus`, `--resource_gapfill_memory`, `--resource_gapfill_time` | `32`, `200.GB`, `4.h` | TGS_GAPFILL resources |
 | `--medaka_model` | `null` | Medaka model; null = read from the ONT read headers |
+| `--medaka_bam_workers` | `32` | Workers that build pileups from the BAM for `medaka inference` (medaka default 2) |
+| `--resource_medaka_gpu_time` | `3.h` | MEDAKA_POLISH time limit on the binac2 `gpu` partition (`--resource_medaka_time`, 24 h, applies elsewhere) |
+
+**MEDAKA_POLISH on a GPU.** `medaka_consensus` runs unchanged, except that its `medaka inference` call goes through a shell function in the module. The function adds `--bam_workers` and runs medaka via `bin/medaka_cudnn_retry.py`:
+
+- `medaka_consensus` has no `--bam_workers` option. At medaka's default of 2 workers, the GPU sits mostly idle. On one A30 with a 20 Mb test set, inference took 127 s with 2 workers and 35 s with 16, against 709 s on 32 CPUs.
+- medaka 2.2.1 runs contigs shorter than 10 kb one at a time, unchunked. cuDNN rejects a contig whose pileup is ~115,000 columns long (`CUDNN_STATUS_NOT_SUPPORTED`), and medaka exits. The script reruns only that batch with cuDNN disabled (torch's native GRU kernel) and logs each retry, with the input shape, in `.command.err`.
+- Disabling cuDNN for the whole run instead makes inference about 19× slower: 18 s against 347 s on an RTX 5090 with the same test set.
+- The script replaces `medaka.models.TorchModel.predict_on_batch` and is written against medaka 2.2.1, the version in `--medaka_container`.
+- On CPU no batch is retried and the extra workers make no difference (709 s with 2 workers against 698 s with 16).
 
 ### Annotation
 
