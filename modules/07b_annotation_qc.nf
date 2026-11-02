@@ -1,18 +1,6 @@
 // ============================================================
 // 07b_annotation_qc.nf
-// Annotation QC and ncRNA -- the parts of BRAKER4 that braker.pl does NOT do.
-//
-// SCOPE NOTE: braker.pl itself is deliberately untouched. BRAKER4's genemark/,
-// augustus_training/ and augustus_predict/ rule sets reimplement what braker.pl
-// already does internally, so porting those would mean rewriting braker.pl. What
-// is genuinely additive is the QC, ncRNA and transcript-evidence work below.
-//
-// ALREADY COVERED, deliberately NOT ported:
-//   best_by_compleasm -- braker.pl does this natively when --busco_lineage is
-//     passed, which this pipeline already does. Verified in the v3.1.1 --help text
-//     and by finding /opt/TSEBRA/bin/best_by_compleasm.py inside the image.
-//   run_trnascan / run_barrnap -- already in stages 07 and 06.
-//   run_masking -- stage 06 does this; repeats are a prerequisite here.
+// Annotation QC and ncRNA: compleasm, OMArk, Infernal/Rfam, StringTie.
 // ============================================================
 
 nextflow.enable.dsl = 2
@@ -20,10 +8,6 @@ nextflow.enable.dsl = 2
 // ============================================================
 // Process: COMPLEASM
 // Fast BUSCO-equivalent completeness on the genome.
-//
-// Faster than BUSCO on a 600 Mb genome and reports single/duplicated/fragmented
-// in the same terms, so it cross-checks the BUSCO numbers rather than replacing
-// them.
 // ============================================================
 process COMPLEASM {
     label 'annotation_qc_env'
@@ -44,9 +28,8 @@ process COMPLEASM {
     path "versions.yml", emit: versions
 
     script:
-    // compleasm keeps its lineage data in a download directory; pointing it at a
-    // pre-populated one keeps this offline, exactly as BUSCO's --offline does.
-    def db_arg = (compleasm_db && !compleasm_db.name.startsWith('NO_')) ? "-L ${compleasm_db}" : ""
+    // pre-populated lineage dir keeps compleasm offline
+    def db_arg = (compleasm_db && !compleasm_db.baseName.startsWith('NO_')) ? "-L ${compleasm_db}" : ""
     """
     compleasm run \\
       -a ${assembly} \\
@@ -85,14 +68,8 @@ process COMPLEASM {
 // Process: OMARK
 // Proteome completeness AND contamination, from OMAmer placements.
 //
-// WHY THIS MATTERS HERE MORE THAN BUSCO: braker.pl is run with --busco_lineage,
-// which uses compleasm to select the TSEBRA mode that MAXIMISES BUSCO. The
-// resulting BUSCO score is therefore optimised against, not independent of, the
-// metric -- it cannot be reported as an unbiased completeness figure. OMArk is
-// independent of that loop, so it is the honest headline number.
-//
-// OMArk also reports contamination, which is directly relevant to a coral
-// holobiont where symbiont and bacterial sequence is expected.
+// OMArk is independent of BRAKER's BUSCO-driven TSEBRA mode choice, and also
+// reports contamination.
 // ============================================================
 process OMARK {
     label 'annotation_qc_env'
@@ -115,21 +92,17 @@ process OMARK {
 
     script:
     """
-    # ete3 (used by OMArk for the NCBI taxonomy) creates ~/.etetoolkit and
-    # downloads taxdump there; HOME is read-only in the container.
+    # ete3 writes ~/.etetoolkit; HOME is read-only in the container
     export HOME=\$PWD
 
-    # OMAmer placement first, then OMArk reads those placements.
     omamer search \\
       --db ${omamer_db} \\
       --query ${proteins} \\
       --out proteins.omamer \\
       --nthreads ${task.cpus}
 
-    # OMArk's isoform ("splice") file: one line per gene, its transcript IDs
-    # separated by ';'. Without it every isoform is scored as a separate protein
-    # and alternative isoforms are counted as duplicated HOGs (36% "unexpected
-    # duplicates" on this proteome vs 16% with it).
+    # OMArk's isoform ("splice") file: one line per gene, transcript IDs separated
+    # by ';'. Without it isoforms count as duplicated HOGs.
     awk -F'\\t' '!/^#/ && \$3=="mRNA" {
         match(\$9, /ID=[^;]+/);     id = substr(\$9, RSTART+3, RLENGTH-3)
         match(\$9, /Parent=[^;]+/); g  = substr(\$9, RSTART+7, RLENGTH-7)
@@ -172,13 +145,7 @@ process OMARK {
 // Process: INFERNAL_CMSCAN
 // Rfam ncRNA annotation (rRNA, snRNA, snoRNA, miRNA, riboswitches...).
 //
-// This is a genuine gap rather than a refinement: the pipeline currently
-// annotates tRNAs (tRNAscan-SE) and rRNAs (barrnap) and nothing else, so every
-// other ncRNA class is simply absent from the final GFF3.
-//
-// -Z is REQUIRED for correct E-values: cmscan computes them against a stated
-// search-space size in megabases, so it must be told the genome size (both
-// strands) or the E-values are meaningless.
+// -Z: search space in Mb (both strands), needed for correct E-values.
 // ============================================================
 process INFERNAL_CMSCAN {
     label 'annotation_qc_env'
@@ -190,8 +157,7 @@ process INFERNAL_CMSCAN {
 
     input:
     path assembly
-    path rfam_dir      // WHOLE directory: cmscan needs Rfam.cm's cmpress indices
-                       // (.i1f/.i1i/.i1m/.i1p) staged alongside the .cm itself
+    path rfam_dir      // whole directory: cmscan needs the cmpress indices next to Rfam.cm
     val  rfam_cm_name
     val  rfam_clanin_name
 
@@ -203,7 +169,6 @@ process INFERNAL_CMSCAN {
     script:
     def clan_arg = rfam_clanin_name ? "--clanin ${rfam_dir}/${rfam_clanin_name}" : ""
     """
-    # Search space in Mb, counting BOTH strands, as Infernal's manual requires.
     GSIZE=\$(grep -v '^>' ${assembly} | tr -d '\\n' | wc -c)
     Z=\$(awk -v g="\$GSIZE" 'BEGIN{printf "%.6f", g*2/1000000}')
     echo "genome 2x\$GSIZE bp -> -Z \$Z Mb"
@@ -241,13 +206,7 @@ process INFERNAL_CMSCAN {
 // Process: STRINGTIE_ASSEMBLE
 // Reference-guided transcript assembly from the merged RNA-seq BAM.
 //
-// SCOPE, stated honestly: this produces UTR-bearing transcript models as
-// EVIDENCE and reports transcript-level statistics. It does NOT rewrite the
-// BRAKER gene models. Faithfully transferring UTRs onto predicted CDS requires
-// GUSHR (which is what BRAKER4's add_utr rule uses) and GUSHR is not present in
-// the braker3 image or packaged in bioconda. Doing the transfer approximately
-// would corrupt gene models, which is worse than not having UTRs, so the
-// transfer is left as a separate deliberate step.
+// Transcript models are evidence and statistics only; the gene models are not changed.
 // ============================================================
 process STRINGTIE_ASSEMBLE {
     label 'annotation_qc_env'
@@ -268,9 +227,6 @@ process STRINGTIE_ASSEMBLE {
     path "versions.yml", emit: versions
 
     script:
-    // -G guides assembly with the existing models so transcript IDs stay
-    // relatable to the gene set; --conservative avoids inventing structures that
-    // the RNA-seq does not clearly support.
     """
     stringtie ${bam} \\
       -G ${guide_gff} \\

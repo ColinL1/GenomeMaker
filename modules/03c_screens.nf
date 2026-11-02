@@ -2,9 +2,9 @@
 // 03c_screens.nf
 // NCBI contamination screens and sequence hygiene:
 //   FCS-adaptor, VecScreen (UniVec), FCS-GX -> review of unclear hits -> apply actions.
-// Run on the host-filtered contigs (before scaffolding) and again on the released
-// FASTA (QC gate G9). Scripts: bin/vecscreen_classify.py, bin/screen_review.py,
-// bin/apply_screen_actions.py.
+// Run on the host-filtered contigs (before scaffolding); FCS-adaptor and VecScreen
+// also on the mitogenome (stage 05). Scripts: bin/vecscreen_classify.py,
+// bin/screen_review.py, bin/apply_screen_actions.py.
 // ============================================================
 
 nextflow.enable.dsl = 2
@@ -135,7 +135,7 @@ process FCS_GX {
     apptainer exec ${fcs_binds([fasta, image])} -B \$(readlink -f ${gxdb}) \\
       --env NCBI_FCS_REPORT_ANALYTICS=0 --env GX_NUM_CORES=${task.cpus} \$(readlink -f ${image}) \\
       run_gx --fasta \$(readlink -f ${fasta}) --out-dir \$PWD --gx-db \$(readlink -f ${gxdb})/all \\
-      --tax-id ${params.fcs_tax_id} > gx.log 2>&1
+      --tax-id ${params.taxon_id} > gx.log 2>&1
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -146,14 +146,14 @@ process FCS_GX {
 
     stub:
     """
-    printf '#seq_id\\tstart_pos\\tend_pos\\tseq_len\\taction\\tdiv\\tagg_cont_cov\\ttop_tax_name\\n' > ${sname}.${params.fcs_tax_id}.fcs_gx_report.txt
+    printf '#seq_id\\tstart_pos\\tend_pos\\tseq_len\\taction\\tdiv\\tagg_cont_cov\\ttop_tax_name\\n' > ${sname}.${params.taxon_id}.fcs_gx_report.txt
     touch ${sname}.taxonomy.rpt
     printf '"${task.process}":\\n    fcs-gx: stub\\n' > versions.yml
     """
 }
 
 // Lists FCS-GX REVIEW rows and VecScreen Strong/Moderate matches, and turns the
-// owner's decisions (params.screen_decisions) into actions. This step always succeeds,
+// manual decisions (params.screen_decisions) into actions. This step always succeeds,
 // so the list is published; APPLY_SCREEN_ACTIONS stops the run while any item is undecided.
 process SCREEN_REVIEW {
     label 'res_light'
@@ -173,7 +173,7 @@ process SCREEN_REVIEW {
     path "review/screen_review.tsv", emit: review
 
     script:
-    def dec = decisions.name.startsWith('NO_') ? '' : "--decisions ${decisions}"
+    def dec = decisions.baseName.startsWith('NO_') ? '' : "--decisions ${decisions}"
     """
     # exit status 3 = undecided items; reported by APPLY_SCREEN_ACTIONS after publishing
     screen_review.py --fcs-gx ${gx_report} --vecscreen ${vec_regions} ${dec} --outdir review || [ \$? -eq 3 ]

@@ -11,7 +11,6 @@ include { REPEAT_CLASSIFY ; REPEAT_GFF } from '../modules/06b_repeat_classify.nf
 
 // ============================================================
 // Workflow: REPEATS_PIPELINE
-// rRNA prediction → RepeatModeler + EDTA → combine → RepeatMasker
 // ============================================================
 workflow REPEATS_PIPELINE {
 
@@ -23,15 +22,14 @@ workflow REPEATS_PIPELINE {
         REPEATMODELER(assembly)
         EDTA_RUN(assembly)
         COMBINE_REPEAT_DB(REPEATMODELER.out.repeat_lib, EDTA_RUN.out.edta_lib)
-        // Unknown families classified BEFORE masking, so RepeatMasker reports final labels
         REPEAT_CLASSIFY(COMBINE_REPEAT_DB.out.dedup_lib, params.rm_libraries ?: '')
         REPEATMASKER_RUN(assembly, REPEAT_CLASSIFY.out.lib)
-        REPEAT_GFF(REPEATMASKER_RUN.out.repeat_tbl)
+        REPEAT_GFF(REPEATMASKER_RUN.out.repeat_out)
 
     emit:
         masked_assembly = REPEATMASKER_RUN.out.masked_assembly
+        repeat_out      = REPEATMASKER_RUN.out.repeat_out
         repeat_tbl      = REPEATMASKER_RUN.out.repeat_tbl
-        repeat_summary  = REPEATMASKER_RUN.out.repeat_summary
         repeat_lib      = REPEAT_CLASSIFY.out.lib           // classified library used for masking
         repeat_gff      = REPEAT_GFF.out.gff
         classify_report = REPEAT_CLASSIFY.out.report

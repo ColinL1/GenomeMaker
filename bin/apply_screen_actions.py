@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 0d: apply contamination-screen actions and NCBI sequence hygiene, and lift the GFF3.
+"""Apply contamination-screen actions and NCBI sequence hygiene, and lift the GFF3.
 
 Sequence changes, in this order:
   1. actions from an FCS action table (FCS-GX *.fcs_gx_report.txt and/or FCS-adaptor

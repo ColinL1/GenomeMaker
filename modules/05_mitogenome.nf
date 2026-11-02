@@ -28,7 +28,6 @@ process MITO_READ_FILTER {
 
     script:
     """
-    # Filter for quality >= 10 for mitogenome mapping
     ( set -o pipefail
       gunzip -c ${reads} \\
         | chopper -q 10 \\
@@ -76,10 +75,8 @@ process MITO_MAPPING {
 
     script:
     """
-    # Create minimap2 index for reference
     minimap2 -d mito_ref.mmi ${mito_ref}
 
-    # Map reads to mitogenome reference
     ( set -o pipefail
       minimap2 -ax map-ont mito_ref.mmi ${reads} \\
         | samtools sort -@ ${task.cpus} -O BAM -o mito_mapped.sorted.bam - )
@@ -158,11 +155,8 @@ process MITO_COVERAGE_STATS {
 // Recover the mitogenome from the assembly contigs, circularise,
 // rotate and annotate it (MitoHiFi contig mode, MITOS2 annotation).
 //
-// Takes the PRE-purge assembly: purge_dups removes the mito contig
-// as HIGHCOV, so it is absent from every later assembly.
-// MitoHiFi requires the related mitogenome as FASTA and GenBank. MITOS2
-// annotates de novo, so a feature-less GenBank written from the FASTA is
-// enough and no annotated reference is needed (MitoFinder would need one).
+// Takes the pre-purge assembly (purge_dups removes the mito contig as HIGHCOV).
+// MITOS2 annotates de novo, so a feature-less GenBank of the reference is enough.
 // ============================================================
 process MITOHIFI {
     label 'mito_env'
@@ -183,6 +177,7 @@ process MITOHIFI {
     path "contigs_stats.tsv",               emit: stats,       optional: true
     path "shared_genes.tsv",                emit: shared,      optional: true
     path "potential_contigs",               emit: contigs_dir, optional: true
+    path "contigs_ids.txt",                 emit: contig_ids,  optional: true   // contigs matching the reference
     path "mitohifi.log",                    emit: log
     path "versions.yml",                    emit: versions
 
@@ -207,6 +202,7 @@ SeqIO.write(r, 'mito_ref.gb', 'genbank')
         grep -q "'parsed_blast.txt' and 'parsed_blast_all.txt' files are empty" mitohifi.log || exit \$status
         echo "MITOHIFI: no mitochondrial contig found in ${assembly}" >&2
     fi
+    if [ -s contigs_filtering/contigs_ids.txt ]; then cp contigs_filtering/contigs_ids.txt contigs_ids.txt; fi
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -218,6 +214,7 @@ SeqIO.write(r, 'mito_ref.gb', 'genbank')
     stub:
     """
     touch final_mitogenome.fasta final_mitogenome.gff mitohifi.log
+    printf 'contig_id\tframeshifts_found\tannotation_file\tlength(bp)\tnumber_of_genes\twas_circular\n' > contigs_stats.tsv
     echo "MITOHIFI stub completed"
 
     cat <<-END_VERSIONS > versions.yml
@@ -228,7 +225,7 @@ SeqIO.write(r, 'mito_ref.gb', 'genbank')
 }
 
 // ============================================================
-// Mitogenome, final product (added 2026-10-04)
+// Mitogenome, final product
 //
 // Two routes to the sequence, chosen by whether Illumina shotgun DNA of the
 // same individual is supplied (params.illumina_dna_r1/_r2):
@@ -377,9 +374,7 @@ process MITO_MAPPED_READS {
 
 // ============================================================
 // Process: MITO_READS_HQ
-// Keep mito reads of mean quality >= params.mito_polish_min_q. Tested on this
-// dataset: Q19-Q21 reproduced the Illumina mitogenome exactly; lower cut-offs
-// kept both homopolymer errors, higher ones had too little depth.
+// Keep mito reads of mean quality >= params.mito_polish_min_q.
 // ============================================================
 process MITO_READS_HQ {
     label 'mito_env'
@@ -419,10 +414,9 @@ process MITO_READS_HQ {
 
 // ============================================================
 // Process: MITO_MEDAKA
-// Polish the ONT mitogenome with the high-quality mito reads. The model is
-// params.medaka_model, or read from the headers of the original ONT reads
-// exactly as MEDAKA_POLISH does (the mito reads come from a BAM and have
-// lost their header tags).
+// Polish the ONT mitogenome with the high-quality mito reads. Without
+// params.medaka_model, the model comes from the original ONT read headers
+// (the mito reads come from a BAM and have lost their tags).
 // ============================================================
 process MITO_MEDAKA {
     label 'mito_env'
@@ -662,8 +656,6 @@ process MITO_MITOS2 {
 // Process: MITO_GENE_CHECK
 // Translate every lifted CDS with the mitochondrial genetic code and compare
 // it to the reference protein: same length and no internal stop = OK.
-// This is the only self-check available without Illumina data; it cannot
-// see errors outside protein-coding genes.
 // ============================================================
 process MITO_GENE_CHECK {
     label 'mito_env'
@@ -723,5 +715,45 @@ process MITO_GENE_CHECK {
     "${task.process}":
         agat: "stub"
     END_VERSIONS
+    """
+}
+
+// ============================================================
+// Remove the contigs MitoHiFi identified as mitochondrial from the NUCLEAR assembly
+// (bin/remove_mito_contigs.py), so the mitogenome is not released twice. Listed contigs
+// longer than params.mito_contig_max_ratio x the reference mitogenome are kept.
+// ============================================================
+process REMOVE_MITO_CONTIGS {
+    label 'res_light'
+    tag   "remove_mito_contigs"
+
+    conda 'conda-forge::python=3.12'
+    container 'quay.io/biocontainers/python:3.12'
+    publishDir "${params.outdir}/05_mitogenome/nuclear_filter", mode: params.publish_mode, pattern: '*.tsv'
+
+    input:
+    path assembly
+    path contig_ids,   stageAs: 'mitohifi/*'   // or NO_ placeholder: nothing found
+    path contig_stats, stageAs: 'mitohifi/*'
+    path mito_ref
+
+    output:
+    path "nuclear_contigs.fasta",    emit: fasta
+    path "mito_contigs_removed.tsv", emit: report
+    path "versions.yml",             emit: versions
+
+    script:
+    """
+    remove_mito_contigs.py ${assembly} ${contig_ids} ${contig_stats} ${mito_ref} ${params.mito_contig_max_ratio} \\
+        nuclear_contigs.fasta mito_contigs_removed.tsv
+
+    printf '"${task.process}":\\n    python: "%s"\\n' "\$(python3 --version | sed 's/Python //')" > versions.yml
+    """
+
+    stub:
+    """
+    cp ${assembly} nuclear_contigs.fasta
+    printf 'contig\\tlength\\tcircular\\tgenes\\taction\\n' > mito_contigs_removed.tsv
+    printf '"${task.process}":\\n    python: stub\\n' > versions.yml
     """
 }

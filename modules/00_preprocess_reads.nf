@@ -11,7 +11,6 @@ nextflow.enable.dsl = 2
 // ============================================================
 process PORECHOP {
     label 'reads_env'
-    label 'res_read_tool'
     tag   "porechop_${reads.simpleName}"
 
     conda 'bioconda::porechop'
@@ -219,17 +218,7 @@ process MULTIQC {
 // ============================================================
 // Process: CHOPPER_HQ_READS
 // High-quality read subset used ONLY for k-mer genome size estimation.
-//
-// WHY A SEPARATE PROCESS, not a third CHOPPER_SPLIT output: CHOPPER_SPLIT's
-// outputs feed purge_dups, the mitogenome stage and all of contamination
-// filtering, so touching its script invalidates the cache for most of the
-// pipeline. Deriving the k-mer read set here keeps that cache intact.
-//
-// WHY FILTER AT ALL: GenomeScope models a k-mer spectrum assuming most k-mers are
-// either genomic or clearly erroneous. Raw ONT error rates smear the error peak
-// into the homozygous peak, which inflates the apparent genome size. Restricting
-// to higher-quality reads sharpens both peaks. The estimate remains advisory for
-// a long-read-only dataset -- say so in methods.
+// ONT errors smear the error peak into the homozygous peak and inflate the size estimate.
 // ============================================================
 process CHOPPER_HQ_READS {
     label 'reads_env'
@@ -282,7 +271,7 @@ process CHOPPER_HQ_READS {
 
 // ============================================================
 // Process: CHOPPER_SPLIT
-// Split reads into assembly (longer) and polishing (shorter) sets
+// Split reads into an assembly set (q3, >=1 kb) and a polishing set (q5, >=500 bp)
 // Optionally filter symbiont contamination
 // ============================================================
 process CHOPPER_SPLIT {
@@ -303,36 +292,26 @@ process CHOPPER_SPLIT {
     path "versions.yml", emit: versions
 
     script:
-    def contam_opt = params.skip_symbiont_filter.toString().toBoolean() || !symbiont_ref
+    def contam_opt = !params.run_symbiont_filter.toString().toBoolean() || !symbiont_ref
         ? ''
         : "--contam ${symbiont_ref}"
     def half_cpus = Math.max(1, (task.cpus / 2) as int)
     """
-    # ONE decompression, tee'd into BOTH chopper streams, which run concurrently.
-    #
-    # The previous version backgrounded two full pipelines, so the streams were
-    # already parallel -- the waste was decompressing the same ~14.5 GB input
-    # TWICE. tee removes that without serialising anything: both chopper
-    # processes consume the single stream simultaneously.
-    #
-    # gzip -2 rather than the default -6: these are intermediate read sets that
-    # exist only to feed the assembler and the polisher, and this container ships
-    # no pigz/bgzip (verified), so compression is single-threaded per stream.
-    # -2 cuts that cost substantially for a few percent more size, which is the
-    # right trade for a regenerable intermediate. Use a mulled chopper+pigz image
-    # if the compression time ever needs to come down further.
-    (
-      set -o pipefail
-      gunzip -c ${reads_pc} \\
-        | tee >(chopper -q 3 -l 1000 ${contam_opt} --threads ${half_cpus} \\
-                  | gzip -2 > assembly_reads.fastq.gz) \\
-        | chopper -q 5 -l 500 ${contam_opt} --threads ${half_cpus} \\
-          | gzip -2 > polishing_reads.fastq.gz
-    )
+    # one decompression tee'd into both chopper streams; the assembly stream reads
+    # a FIFO in the background so its exit status can be collected with `wait`
+    set -o pipefail
+    mkfifo assembly_stream
+    chopper -q 3 -l 1000 ${contam_opt} --threads ${half_cpus} < assembly_stream \\
+        | gzip -2 > assembly_reads.fastq.gz &
+    assembly_pid=\$!
 
-    # Process substitution is reaped asynchronously, so wait for the tee branch to
-    # finish flushing before the task exits and Nextflow collects the outputs.
-    wait
+    gunzip -c ${reads_pc} \\
+        | tee assembly_stream \\
+        | chopper -q 5 -l 500 ${contam_opt} --threads ${half_cpus} \\
+        | gzip -2 > polishing_reads.fastq.gz
+
+    wait \$assembly_pid
+    rm -f assembly_stream
 
     for f in assembly_reads.fastq.gz polishing_reads.fastq.gz; do
         if [ ! -s "\$f" ]; then

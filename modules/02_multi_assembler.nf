@@ -69,11 +69,8 @@ process ASSEMBLE_FLYE {
 
     script:
     def genome_size_arg = genome_size ? "--genome-size ${genome_size}" : ""
-    // --meta is metagenome mode: it relaxes Flye's uniform-coverage assumption,
-    // which suits a holobiont sample carrying Symbiodiniaceae and bacteria at
-    // very different depths. It also changes repeat resolution and interacts with
-    // --genome-size, so it is a deliberate, documented choice rather than a
-    // default -- state it in methods. Toggle it off for a clean host-only library.
+    // --meta relaxes the uniform-coverage assumption (holobiont: symbionts and
+    // bacteria at very different depths)
     def meta_arg = params.flye_meta.toString().toBoolean() ? "--meta" : ""
     """
     flye --nano-hq ${assembly_reads} \\
@@ -122,9 +119,7 @@ process ASSEMBLE_HIFIASM {
 
     script:
     def genome_size_arg = genome_size ? "--hg-size ${(genome_size as double) / 1e6}m" : ""
-    // -l2 (default purge level) rather than -l0: coral genomes are heterozygous
-    // enough that disabling haplotig purging tends to retain both haplotypes
-    // as separate contigs, inflating apparent size / BUSCO duplication.
+    // -l2: heterozygous coral genomes keep both haplotypes with -l0
     """
     mkdir -p hifiasm_out
     
@@ -190,9 +185,7 @@ process ASSEMBLE_RAVEN {
 }
 
 // ============================================================
-// QC processes. Filenames embed ${name} so multiple assemblers'
-// reports can be safely staged together into COMBINE_COMPARISON
-// and RANK_ASSEMBLIES without collisions.
+// QC processes. Filenames embed ${name} so assemblers' reports do not collide.
 // ============================================================
 
 process BUSCO_ASSEMBLY {
@@ -215,11 +208,7 @@ process BUSCO_ASSEMBLY {
     path "versions.yml", emit: versions
 
     script:
-    // --offline is required alongside --download_path, not optional. Without it
-    // BUSCO still contacts busco-data.ezlab.org to version-check the lineage and
-    // errors out (it does not fall back gracefully) on a node with no egress.
-    // It also pins the dataset version: without --offline a silent upstream update
-    // mid-project makes BUSCO scores non-comparable across runs of this pipeline.
+    // --offline: otherwise BUSCO contacts busco-data.ezlab.org and fails without egress
     def busco_dir = params.busco_offline_dir ? "--offline --download_path ${busco_db_dir}" : ""
     def busco_mem = "${task.memory.toGiga()}g"
     """
@@ -330,9 +319,6 @@ process QUAST_QC {
 // ============================================================
 // Process: COMBINE_COMPARISON
 // Aggregate per-assembler QC into comparison reports.
-// Parses BUSCO short_summary.txt (the "C:91.4%[S:...,D:...],F:...,M:...,n:..."
-// line), NOT full_table.tsv -- full_table.tsv has no such summary line,
-// so the previous version's parser silently matched nothing.
 // ============================================================
 process COMBINE_COMPARISON {
     label 'res_tiny'
@@ -343,9 +329,8 @@ process COMBINE_COMPARISON {
     publishDir "${params.outdir}/02_assembly/comparison", mode: params.publish_mode
 
     input:
-    path gfastats_reports    // ${name}.gfastats.txt files
-    path busco_summaries     // ${name}.${lineage}.short_summary.txt files (host lineage)
-    path combine_comparison_script
+    path gfastats_reports
+    path busco_summaries
 
     output:
     path "assembly_comparison.tsv",  emit: comparison_tsv
@@ -354,8 +339,7 @@ process COMBINE_COMPARISON {
 
     script:
     """
-    PYTHON=\$(command -v python3 || command -v python) || { echo "ERROR: no python interpreter found" >&2; exit 1; }
-    \$PYTHON  ${combine_comparison_script}
+    combine_comparison.py
     
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

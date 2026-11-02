@@ -10,15 +10,8 @@ nextflow.enable.dsl = 2
 // Process: PHOBIUS_RUN
 // Signal peptide and transmembrane topology prediction.
 //
-// PORTABILITY: Phobius is licence-restricted, so no public image may legally
-// ship it -- but that is not a reason to abandon the container. phobius.pl is
-// plain Perl plus a small bundled binary, so it runs in a stock perl image with
-// the LICENSED DIRECTORY STAGED AS A PATH INPUT. Anyone with their own licence
-// drops it in and the container is unchanged. This is the same pattern the
-// pipeline already uses for blast_db, diamond_db and the BUSCO offline dir.
-//
-// phobius.pl resolves its model and decodeanhmm relative to its own location
-// (FindBin), so the whole directory must be staged, not just the script.
+// Licence-restricted: the licensed directory is staged as a path input into a
+// stock perl image. phobius.pl locates its files via FindBin, so stage the whole directory.
 // ============================================================
 process PHOBIUS_RUN {
     label 'functional_env'
@@ -41,18 +34,13 @@ process PHOBIUS_RUN {
     # Phobius rejects the '*' stop characters gffread emits for partial models.
     sed '/^>/!s/\\*//g' ${proteins} > proteins_clean.faa
 
-    # phobius.pl calls ./decodeanhmm next to itself, which is the 32-bit binary and
-    # cannot run in a 64-bit container (Phobius then dies with the misleading
-    # "Could not read provided fasta sequence"). Run from a local copy of the
-    # install with the shipped decodeanhmm.64bit in its place; the licensed
-    # install itself is not modified.
+    # ./decodeanhmm is 32-bit; run a local copy with decodeanhmm.64bit in its place
     cp -rL ${phobius_dir} phobius_local
     if [ -x phobius_local/decodeanhmm.64bit ]; then
         cp phobius_local/decodeanhmm.64bit phobius_local/decodeanhmm
     fi
 
-    # -short: funannotate annotate --phobius parses the one-line-per-protein short
-    # format (ID TM SP PREDICTION); the default long format crashes its parser.
+    # -short: funannotate's --phobius parser needs the short format
     perl phobius_local/phobius.pl -short proteins_clean.faa > phobius_results.txt
 
     if [ ! -s phobius_results.txt ]; then
@@ -82,24 +70,10 @@ process PHOBIUS_RUN {
 
 // ============================================================
 // Process: INTERPROSCAN
-// InterProScan run directly, not through funannotate's `-m docker` wrapper --
-// that made funannotate shell out to `docker run` from inside a container, which
-// cannot work under Apptainer on a compute node.
-//
-// PORTABILITY. InterProScan needs ~45 GB of analysis data that no image carries,
-// so the DATA always comes from the host. The SOFTWARE still comes from a
-// container by default. Two supported modes:
-//
-//   container mode (default, portable): params.interproscan_container supplies
-//     the software and params.interproscan_data the analysis data. InterProScan
-//     validates that the two are the SAME RELEASE, so they must match.
-//
-//   local mode (params.interproscan_dir set): use an existing site install and
-//     bypass the container. Chosen on this system because a complete 5.63-95.0
-//     install already exists and no public image matches that release
-//     (biocontainers stops at 5.59-91.0; interpro/interproscan starts at
-//     5.73-104.0), so container mode would mean re-downloading ~50 GB of
-//     version-matched data for no scientific gain.
+// InterProScan run directly (funannotate's `-m docker` cannot work under Apptainer).
+// The analysis data always comes from the host. Container mode (default): the
+// data must match params.interproscan_container's release. Local mode:
+// params.interproscan_dir points at a site install.
 // ============================================================
 process INTERPROSCAN {
     label 'functional_env'
@@ -107,14 +81,12 @@ process INTERPROSCAN {
 
     conda 'bioconda::interproscan'
     container "${params.interproscan_dir ? '' : params.interproscan_container}"
-    // Container mode: the official image expects its analysis data at
-    // /opt/interproscan/data (docs: -v <data>:/opt/interproscan/data).
     containerOptions "${params.interproscan_dir ? '' : "-B ${params.interproscan_data}:/opt/interproscan/data"}"
     publishDir "${params.outdir}/08_functional_annotation/interproscan", mode: params.publish_mode
 
     input:
     path proteins
-    path ipr_dir     // local install dir, or the staged data dir in container mode
+    path ipr_dir     // local install, or the data dir in container mode
 
     output:
     path "iprscan.xml", emit: iprscan_xml
@@ -124,8 +96,7 @@ process INTERPROSCAN {
     script:
     def ipr_exe = params.interproscan_dir ? "${params.interproscan_dir}/interproscan.sh" : "/opt/interproscan/interproscan.sh"
     """
-    # InterProScan rejects '*' stop characters, which gffread emits for partial
-    # models -- strip them rather than letting a long run die late.
+    # InterProScan rejects '*' stop characters (gffread emits them for partial models)
     sed '/^>/!s/\\*//g' ${proteins} > proteins_clean.faa
 
     ${ipr_exe} \\
@@ -137,8 +108,7 @@ process INTERPROSCAN {
       --goterms --pathways \\
       --disable-precalc \\
       --tempdir \$PWD/ipr_temp
-    # --tempdir: the default is temp/ inside the InterProScan install, which is
-    # read-only in the container (and would write into a shared install locally).
+    # --tempdir: the default is inside the (read-only) install
 
     if [ ! -s iprscan.xml ]; then
         echo "ERROR: InterProScan produced no XML." >&2
@@ -170,12 +140,6 @@ process INTERPROSCAN {
 }
 
 // ============================================================
-// NOTE: IPRSCAN_RUN (funannotate iprscan -m docker) was REMOVED. It launched
-// the InterProScan *Docker* image from inside a container, which cannot work
-// under Apptainer/SLURM. Replaced by the INTERPROSCAN process below.
-// ============================================================
-
-// ============================================================
 // Process: EGGNOG_MAPPER
 // Run eggNOG-mapper for orthology and GO annotations
 // ============================================================
@@ -197,14 +161,6 @@ process EGGNOG_MAPPER {
     path "versions.yml", emit: versions
 
     script:
-    // --data_dir must point at the eggNOG database, not the funannotate one --
-    // it was previously handed params.funannotate_db, a different database
-    // entirely, so emapper either failed to find its data or silently searched
-    // the wrong thing.
-    //
-    // `--no_egeny` was not a valid emapper flag (no such option in 2.1.x) and has
-    // been dropped. Annotation is the point of running this, so there is nothing
-    // here that should be suppressed.
     """
     emapper.py \\
       --cpu ${task.cpus} \\
@@ -251,33 +207,23 @@ process FUNANNOTATE_ANNOTATE {
     path eggnog_anno
     path iprscan_xml
     path phobius_results
-    path funannotate_db   // configured funannotate database (funannotate setup)
+    path funannotate_db
 
     output:
     path "final_anno", emit: anno_dir
-    // product names tbl2asn had to rewrite; written to the task dir, read by the release's product curation
+    path "final_anno/annotate_results/*.stats.json", emit: stats_json
+    // product names tbl2asn rewrote, read by the release's product curation
     path "*.fixedproducts", emit: fixedproducts, optional: true
     path "versions.yml", emit: versions
 
     script:
-    // InterProScan and Phobius are OPTIONAL evidence: InterProScan needs a ~50 GB
-    // data directory that may not be installed, and Phobius is licence-restricted
-    // so its image is not always pullable. Both arrive as a NO_FILE placeholder
-    // when skipped -- the same pattern MULTIQC_FINAL uses for its optional config.
-    def ipr_arg = (iprscan_xml     && !iprscan_xml.name.startsWith('NO_'))     ? "--iprscan ${iprscan_xml}"     : ""
-    def pho_arg = (phobius_results && !phobius_results.name.startsWith('NO_')) ? "--phobius ${phobius_results}" : ""
-    //
-    // --busco_db must be a lineage inside FUNANNOTATE_DB. funannotate 1.x only
-    // supports its own odb9-era sets (metazoa, dikarya, ...), not odb12, so it
-    // has its own param; the pipeline's BUSCO/compleasm QC keeps busco_lineage.
+    // InterProScan and Phobius are optional (NO_FILE placeholder when skipped)
+    def ipr_arg = (iprscan_xml     && !iprscan_xml.baseName.startsWith('NO_'))     ? "--iprscan ${iprscan_xml}"     : ""
+    def pho_arg = (phobius_results && !phobius_results.baseName.startsWith('NO_')) ? "--phobius ${phobius_results}" : ""
     """
-    # funannotate finds its database only through FUNANNOTATE_DB; without it,
-    # annotate aborts with "Funannotate database not properly configured".
     export FUNANNOTATE_DB=\$(readlink -f ${funannotate_db})
 
-    # funannotate's BUSCO step runs AUGUSTUS and needs AUGUSTUS_CONFIG_PATH (unset
-    # in the image), and it creates a species there with new_species.pl -- the
-    # image's /usr/local/config is read-only, so use a writable copy.
+    # funannotate's BUSCO step writes into AUGUSTUS_CONFIG_PATH, read-only in the image
     cp -r "\${AUGUSTUS_CONFIG_PATH:-/usr/local/config}" augustus_config
     export AUGUSTUS_CONFIG_PATH="\$PWD/augustus_config"
 
@@ -294,7 +240,7 @@ process FUNANNOTATE_ANNOTATE {
     
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        funannotate: "\$(funannotate --version 2>&1 | sed 's/funannotate v//' || echo unknown)"
+        funannotate: "\$(funannotate --version 2>&1 | grep -m1 '^funannotate v' | sed 's/funannotate v//' || echo unknown)"
         container: "${task.container ?: 'conda'}"
     END_VERSIONS
     """
@@ -314,14 +260,3 @@ process FUNANNOTATE_ANNOTATE {
     END_VERSIONS
     """
 }
-
-// ============================================================
-// NOTE: a FINAL_BUSCO process lived here. It was dead code -- never
-// imported or called by subworkflows/08_functional_annotation.nf -- and
-// carried three bugs: BUSCO output paths that BUSCO never creates, a GFF3
-// passed to -m transcriptome (which needs a transcript FASTA), and
-// --offline given an argument when it takes none. Annotation-level
-// completeness is covered by BUSCO_FINAL (stage 04) plus the compleasm and
-// OMArk QC added in stage 07.
-// ============================================================
-

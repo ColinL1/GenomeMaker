@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Step 5 (WP9, owner decision 2026-10-19): product-name curation list from funannotate pass 1.
+"""Product-name curation list from funannotate pass 1.
 
 Genes are selected when
-  - their symbol is in the owner-checked draft -> product from the draft;
+  - their symbol is in the manually checked draft -> product from the draft;
   - their symbol is in Gene2Products.need-curating.txt;
   - their product is a GO term / eggNOG description / truncated name (patterns below), or
   - their product is 'hypothetical protein' while they carry a symbol.
@@ -16,7 +16,7 @@ table2asn's 'gnl|ncbi|ID.tN' lines and funannotate tbl2asn's tab lines ending in
 selected as well, so the GFF3/GenBank and the .sqn keep the same product.
 
 Symbols on the need-curating list are looked up in UniProt like the others. The optional draft file
-(symbol, product, current product, notes; a missing file means none) gives owner-checked products: a gene
+(symbol, product, current product, notes; a missing file means none) gives manually checked products: a gene
 with that symbol gets the product, selected or not; with a current product, only genes whose product is
 exactly that one.
 
@@ -58,7 +58,7 @@ BAD = re.compile(r'(^(positive |negative )?regulation of|activity$|^Belongs to|p
                  r'^[A-Za-z]+(-[A-Za-z]+)+$|identity$|^maintenance of|\([A-Z][a-z]+ [a-z]+\)$|'
                  # funannotate shortenings: 'sub'/'super' for subfamily/superfamily, lost hyphen in 'ATP-dependent'
                  r'\bsub\b|\bsuper\b|(?-i:[A-Z]{2,}dependent)|'
-                 # eggNOG sentences and GO-term fragments (NCBI SUSPECT_PRODUCT_NAMES, 2026-10-23)
+                 # eggNOG sentences and GO-term fragments (NCBI SUSPECT_PRODUCT_NAMES)
                  r'\b(is|are|stimulates|regulates|catalyzes|plays)\b|^ligand for|activity,|acting on|'
                  r'^structural constituent|'
                  # clone / model IDs, stray single letters left by name cleaning, lowercase descriptions
@@ -178,7 +178,7 @@ with open(out_p, 'w') as o:
         base = re.sub(r'_\d+$', '', n)
         own = next((new for new, cur in draft.get(base, []) if cur in (None, p)), None)
         if own is not None:
-            o.write(f'{g}\t{n}\t{p}\t{own}\tfix\tdraft (owner check)\n')
+            o.write(f'{g}\t{n}\t{p}\t{own}\tfix\tdraft (manual check)\n')
             cnt['fix_draft'] += 1
             continue
         if not (base in need or BAD.search(p) or p.lower() in TERMS or (p == 'hypothetical protein' and n)

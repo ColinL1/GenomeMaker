@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""WP6 classifier: label each gap junction from DIAMOND hits of its two flanking segments.
+"""Gap-fusion classifier: label each gap junction from DIAMOND hits of its two flanking segments.
 
-Classes (as in the 2026-10-16 review): same_protein_collinear, same_protein_noncollinear,
+Classes: same_protein_collinear, same_protein_noncollinear,
 different_proteins, one_side_only, no_hit, segment_lt_30aa.
 
 Tags:
   possible_gap_fusion   class different_proteins at an unsupported junction
   possible_gap_misorder class same_protein_noncollinear at an unsupported junction
 
-Strict split rule (Plan 1, WP6). A junction is split only if ALL hold:
+Strict split rule. A junction is split only if ALL hold:
   1. support == unsupported (no RNA or protein intron hint);
   2. in at least MIN_SPECIES proteomes the two halves' best hits are different proteins;
   3. in those proteomes each half covers >= MIN_COV of its best reference protein;

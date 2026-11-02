@@ -29,13 +29,6 @@ process TRNASCAN_SE {
     path "versions.yml", emit: versions
 
     script:
-    // -j/--gff is tRNAscan-SE's own GFF3 writer (verified present in 2.0.13).
-    // This replaces config/bin/trnascan_to_gff3.pl, which parsed the -o TABULAR
-    // output using the field layout of the -f STRUCTURE file: its column indices
-    // were wrong throughout ($f[4] is the tRNA type, not the start; $f[7] is the
-    // intron end, not the strand; $f[10] is the note field), and its strand logic
-    // made minus-strand features impossible to emit. It produced a malformed GFF
-    // that then fed AGAT. Using the tool's own writer removes the whole class of bug.
     """
     tRNAscan-SE -E -I -H --detail --thread ${task.cpus} \\
       -o trnascan.out \\
@@ -44,8 +37,7 @@ process TRNASCAN_SE {
       -m trnascan.log \\
       ${assembly}
 
-    # A genome with zero tRNAs is not plausible for a metazoan assembly, so an
-    # empty GFF means the run failed rather than legitimately finding nothing.
+    # zero tRNAs means the run failed
     if [ ! -s trnascan.gff ]; then
         echo "ERROR: tRNAscan-SE produced an empty GFF3 for ${assembly}" >&2
         exit 1
@@ -73,11 +65,7 @@ process TRNASCAN_SE {
 
 // ============================================================
 // Process: RNASEQ_TRIM
-// Trim one paired-end RNA-seq library with Trimmomatic.
-// Forked per-sample: the calling workflow supplies a channel of
-// [sample_id, [R1, R2]] tuples (e.g. via channel.fromFilePairs),
-// so Nextflow parallelizes across libraries instead of looping
-// inside a single task.
+// Trim one paired-end RNA-seq library with Trimmomatic (one task per library).
 // ============================================================
 process RNASEQ_TRIM {
     label 'structural_env'
@@ -145,18 +133,10 @@ process STAR_GENOME_INDEX {
     path "versions.yml", emit: versions
 
     script:
-    // --limitGenomeGenerateRAM must track the ALLOCATION, not a hardcoded value.
-    // It was 100 GiB against a 64 GB request, so STAR believed it had 36 GB more
-    // than the scheduler would ever give it -- an OOM kill waiting to happen.
-    // 85% leaves headroom for STAR's non-buffer allocations.
+    // STAR's RAM limit follows the allocation, with headroom for non-buffer use
     def gen_ram = (task.memory.toBytes() * 0.85) as long
     """
-    # --genomeSAindexNbases must scale with genome size: STAR's own formula is
-    # min(14, log2(genomeLength)/2 - 1). The previous hardcoded 10 is a value for
-    # ~4 Mb genomes; for a ~600 Mb coral the correct value is 14, and too small a
-    # value gives a degraded suffix-array index -- slower mapping and worse memory
-    # behaviour. Computed from the actual assembly so it stays right if the
-    # assembly size changes.
+    # STAR's formula: min(14, log2(genomeLength)/2 - 1)
     GLEN=\$(grep -v '^>' ${assembly} | tr -d '\\n' | wc -c)
     SA_N=\$(awk -v g="\$GLEN" 'BEGIN{n=int(log(g)/log(2)/2-1); if(n>14)n=14; if(n<4)n=4; print n}')
     echo "genome length \$GLEN bp -> --genomeSAindexNbases \$SA_N"
@@ -190,10 +170,7 @@ process STAR_GENOME_INDEX {
 
 // ============================================================
 // Process: STAR_MAPPING
-// Map one trimmed paired-end RNA-seq library to the genome with
-// STAR. Forked per-sample (paired with the shared STAR index via
-// `.first()` in the calling workflow); outputs are combined and
-// merged downstream by MERGE_BAMS.
+// Map one trimmed RNA-seq library to the genome with STAR.
 // ============================================================
 process STAR_MAPPING {
     label 'structural_env'
@@ -213,10 +190,7 @@ process STAR_MAPPING {
     path "versions.yml", emit: versions
 
     script:
-    // --limitBAMsortRAM was 50 GB against a 48 GB request, and the loaded genome
-    // index needs memory on top of the sort buffer -- so STAR could exceed the
-    // allocation on its own accounting. Give the sort buffer half the allocation
-    // and let the index have the rest.
+    // half the allocation for the sort buffer, the rest for the genome index
     def sort_ram = (task.memory.toBytes() * 0.5) as long
     """
     STAR \\
@@ -253,8 +227,7 @@ process STAR_MAPPING {
 
 // ============================================================
 // Process: MERGE_BAMS
-// Combine all per-sample STAR BAMs (collected from the forked
-// STAR_MAPPING tasks) into a single merged, indexed BAM.
+// Merge the per-sample STAR BAMs into one indexed BAM.
 // ============================================================
 process MERGE_BAMS {
     label 'structural_env'
@@ -297,99 +270,14 @@ process MERGE_BAMS {
 }
 
 // ============================================================
-// Process: SPLIT_STRANDED_BAM
-// Split merged BAM by read direction for stranded RNA-seq
-// ============================================================
-process SPLIT_STRANDED_BAM {
-    label 'structural_env'
-    tag   "split_strand"
-
-    conda 'bioconda::samtools'
-    container 'quay.io/biocontainers/samtools:1.21--h96c455f_1'
-    publishDir "${params.outdir}/07_structural_annotation/rnaseq/stranded", mode: params.publish_mode
-
-    input:
-    path bam
-
-    output:
-    path "plus_strand.bam",  emit: plus_bam
-    path "minus_strand.bam", emit: minus_bam
-    path "versions.yml", emit: versions
-
-    script:
-    // Uses samtools' own flag predicates instead of awk equality on column 2.
-    // The previous `$2==99 || $2==83` style silently discarded every read whose
-    // flag carried any additional bit -- secondary (256), supplementary (2048),
-    // duplicate (1024), mate-unmapped (8) -- because those make the integer
-    // something other than the four values listed. On a real STAR BAM that is a
-    // large and silent loss.
-    //
-    // dUTP (reverse-stranded, the common Illumina protocol): the transcript
-    // strand is opposite R1. So
-    //   plus-strand transcripts  = R1 on reverse (-f 80)  + R2 on forward (-f 160)
-    //   minus-strand transcripts = R1 on forward (-f 64,-F 16) + R2 on reverse (-f 144)
-    // -F 3844 drops unmapped/secondary/QC-fail/duplicate/supplementary throughout.
-    """
-    FILT="-F 3844"
-
-    # plus-strand transcripts
-    samtools view -b \$FILT -f 80  -o p1.bam ${bam}
-    samtools view -b \$FILT -f 160 -o p2.bam ${bam}
-    samtools merge -f -@ ${task.cpus} plus_strand.bam p1.bam p2.bam
-
-    # minus-strand transcripts
-    samtools view -b \$FILT -f 144 -o m1.bam ${bam}
-    samtools view -b \$FILT -f 64 -F 3860 -o m2.bam ${bam}
-    samtools merge -f -@ ${task.cpus} minus_strand.bam m1.bam m2.bam
-
-    rm -f p1.bam p2.bam m1.bam m2.bam
-
-    for f in plus_strand.bam minus_strand.bam; do
-        if [ "\$(samtools view -c \$f)" -eq 0 ]; then
-            echo "ERROR: \$f has no reads -- check that the library really is" >&2
-            echo "       reverse-stranded (dUTP). For an unstranded library set" >&2
-            echo "       --rnaseq_strandedness unstranded, which skips this split." >&2
-            exit 1
-        fi
-    done
-    
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        samtools: "\$(samtools --version 2>&1 | head -1 | sed 's/samtools //' || echo unknown)"
-        container: "${task.container ?: 'conda'}"
-    END_VERSIONS
-    """
-
-    stub:
-    """
-    touch plus_strand.bam minus_strand.bam
-    echo "SPLIT_STRANDED_BAM stub completed"
-    
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        samtools: "stub"
-    END_VERSIONS
-    """
-}
-
-// ============================================================
 // Process: BRAKER4_RUN
-// Structural gene prediction with BRAKER4 (Snakemake re-implementation of BRAKER3)
+// Structural gene prediction with BRAKER4.
 //
-// Replaces BRAKER3_RUN. braker.pl 3.0.8 (teambraker/braker3 v3.1.1 and v3.0.7.6)
-// cannot use --busco_lineage any more: its compleasm_to_hints.py forces an
-// '_odb10' folder name, while the bundled compleasm 0.2.8 only uses odb12
-// (and odb10 datasets are no longer downloadable). BRAKER4 handles odb12.
-//
-// BRAKER4 is a Snakemake workflow that launches its own containers, so this
-// process has NO container: it runs on the host with the Snakemake env in
-// params.braker4_snakemake_env and apptainer on PATH. BRAKER4 itself is pinned
-// by params.braker4_dir (a checkout of Gaius-Augustus/BRAKER4 at a fixed commit).
-// Deliberately not a `conda` directive: that needs conda.enabled=true, which
-// changes the resume hash of every containerised task in the pipeline.
-//
-// RNA-seq: the merged STAR BAM goes in as is. BRAKER4 has no --stranded option;
-// the transcript strand comes from STAR's XS tags (--outSAMstrandField intronMotif).
+// BRAKER3 (braker.pl 3.0.8) cannot use odb12 BUSCO lineages; BRAKER4 can.
+// No container: BRAKER4 is a Snakemake workflow that launches its own, so this runs
+// on the host with params.braker4_snakemake_env. Not a `conda` directive either:
+// conda.enabled=true would change the resume hash of every containerised task.
+// Transcript strand comes from STAR's XS tags (BRAKER4 has no --stranded option).
 // ============================================================
 process BRAKER4_RUN {
     label 'structural_env'
@@ -405,27 +293,40 @@ process BRAKER4_RUN {
     output:
     path "braker/braker.gtf", emit: braker_gtf
     path "braker/braker.log", emit: braker_log
-    path "braker/results",    emit: braker_results   // BRAKER4 results dir (UTR gtf, gff3, QC, report)
+    path "braker/results",    emit: braker_results
     path "versions.yml", emit: versions
 
     script:
     def sample = params.species_name
+    def on_slurm = params.braker4_executor == 'slurm'
+    // slurm: per-rule node size for BRAKER4 ([SLURM_ARGS]) and the executor flags
+    def slurm_ini = on_slurm
+        ? "printf '[SLURM_ARGS]\\ncpus_per_task = ${params.braker4_slurm_cpus}\\nmem_of_node = ${params.braker4_slurm_mem_mb}\\nmax_runtime = ${params.braker4_slurm_runtime}\\n' >> config.ini"
+        : ''
+    def executor_args = on_slurm
+        ? "--executor slurm --jobs ${params.braker4_slurm_jobs} --max-status-checks-per-second 0.5 " +
+          "--default-resources slurm_partition=${params.braker4_slurm_partition} mem_mb=${params.braker4_slurm_mem_mb}" +
+          (params.project ? " slurm_account=${params.project}" : '') + " tmpdir=\"'\$PWD/tmp'\" " +
+          "--set-resources run_tsebra:mem_mb=48000 run_tsebra_etp_per_run:mem_mb=48000 " +
+          "--restart-times 3 --rerun-incomplete --keep-going --cores ${task.cpus}"
+        : "--cores ${task.cpus}"
     """
     set -euo pipefail
     export PATH="${params.braker4_snakemake_env}/bin:\$PATH"
+    if [ "${params.braker4_executor}" = slurm ]; then
+        python3 -c 'import snakemake_executor_plugin_slurm' 2>/dev/null || {
+            echo "ERROR: braker4_executor=slurm needs snakemake-executor-plugin-slurm in ${params.braker4_snakemake_env}" >&2; exit 1; }
+        mkdir -p tmp   # rules spill sort files to \$TMPDIR; the task dir is shared and bound
+    fi
     BRAKER4_DIR="${params.braker4_dir}"
 
     GENOME=\$(readlink -f ${assembly})
     BAM=\$(readlink -f ${rnaseq_bam})
-    # GeneMark-ETP aborts on a repeated protein ID. coral_proteins_ncbi.faa has
-    # 29,556 IDs present twice, all with identical sequences, so keep the first
-    # record per ID (the source file is left untouched).
+    # GeneMark-ETP aborts on repeated protein IDs: keep the first record per ID
     awk '/^>/{ keep = !seen[\$1]++ } keep' ${protein_refs} > proteins_dedup.faa
     PROT=\$(readlink -f proteins_dedup.faa)
 
-    # The soft-masked assembly is given as both genome and genome_masked: it is
-    # the same sequence (repeats lowercase), and genome_masked is what gene
-    # prediction uses.
+    # the soft-masked assembly serves as both genome and genome_masked
     cat > samples.csv <<-EOF
     sample_name,genome,genome_masked,protein_fasta,bam_files,fastq_r1,fastq_r2,sra_ids,varus_genus,varus_species,isoseq_bam,isoseq_fastq,busco_lineage,reference_gtf
     ${sample},\$GENOME,\$GENOME,\$PROT,\$BAM,,,,,,,,${params.busco_lineage},
@@ -446,13 +347,14 @@ process BRAKER4_RUN {
     run_ncrna = 0
     no_cleanup = 0
     EOF
+    ${slurm_ini}
 
     # Bind every directory the containers must see: the task dir, the real
     # locations of the staged inputs, and the BRAKER4 checkout (download cache).
     BINDS=\$(printf '%s\\n' "\$PWD" "\$(dirname \$GENOME)" "\$(dirname \$BAM)" "\$(dirname \$PROT)" "\$BRAKER4_DIR" | sort -u | sed 's/^/-B /' | tr '\\n' ' ')
 
     snakemake -s "\$BRAKER4_DIR/Snakefile" \\
-      --cores ${task.cpus} \\
+      ${executor_args} \\
       --use-apptainer \\
       --apptainer-prefix "\${NXF_APPTAINER_CACHEDIR:-\$PWD/apptainer_cache}" \\
       --apptainer-args "\$BINDS" \\
@@ -504,19 +406,14 @@ process MERGE_ANNOTATIONS {
     path rfam_family    // Rfam family.txt (per-family type), or a NO_ placeholder
 
     output:
-    path "${params.species_name}.v${params.annotation_version}.gff3", emit: gff3
+    path "${params.species_name}.v${params.version}.gff3", emit: gff3
     path "versions.yml", emit: versions
 
     script:
-    // Output names are param-derived. They used to be hardcoded to
-    // `PAG_..._1.1.gff3` and `Phar.braker.prot.fasta` -- "Phar" is P. harrisoni,
-    // inconsistent with species_name='Porites_sp', and "1.1" was a magic version
-    // string that no longer tracked anything.
-    def gff_out = "${params.species_name}.v${params.annotation_version}.gff3"
-    def use_rfam = !ncrna_tblout.name.startsWith('NO_') && !rfam_family.name.startsWith('NO_')
+    def gff_out = "${params.species_name}.v${params.version}.gff3"
+    def use_rfam = !ncrna_tblout.baseName.startsWith('NO_') && !rfam_family.baseName.startsWith('NO_')
     """
-    # GTF -> GFF3. (agat_sp_convert_format.pl does not exist in AGAT;
-    # agat_convert_sp_gxf2gxf.pl is its GTF/GFF -> GFF3 converter.)
+    # GTF -> GFF3
     agat_convert_sp_gxf2gxf.pl -g ${braker_gtf} -o braker.gff3
 
     # Non-coding RNAs (bin/ncrna_to_gff3.pl):
@@ -527,33 +424,21 @@ process MERGE_ANNOTATIONS {
     ncrna_to_gff3.pl trnascan ${trnascan_gff} > trnascan_genes.gff3
     ${use_rfam ? "ncrna_to_gff3.pl rfam ${ncrna_tblout} ${rfam_family} > rfam_ncrna.gff3" : "# Rfam ncRNAs: skipped (no Infernal output / family.txt)"}
 
-    # Merge gene models with the ncRNA annotations
     agat_sp_merge_annotations.pl \\
       --gff braker.gff3 \\
       --gff trnascan_genes.gff3 \\
       ${use_rfam ? '--gff rfam_ncrna.gff3' : ''} \\
       --out merged.gff
 
-    # Resolve overlapping gene models
     agat_sp_fix_overlaping_genes.pl \\
       -f merged.gff \\
       -o fixed.gff3
 
-    # Normalise/sanity-pass with AGAT's own converter. The previous version called
-    # `gt gff3validator` here, but GenomeTools is not in the AGAT container, so that
-    # line could only fail. Strict spec validation now lives in GT_GFF3_VALIDATE,
-    # which has its own container.
     agat_convert_sp_gxf2gxf.pl -g fixed.gff3 -o normalised.gff3
 
-    # BRAKER's protein-coding models come through as type 'transcript'. The SO
-    # type for a transcript with a CDS is mRNA, and funannotate (util stats,
-    # annotate) only counts mRNA children of genes -- with 'transcript' it saw
-    # zero proteins. tRNA/ncRNA features keep their own types.
+    # funannotate counts only mRNA children of genes; BRAKER writes coding models as 'transcript'
     awk -F'\\t' 'BEGIN{OFS="\\t"} !/^#/ && \$3=="transcript"{\$3="mRNA"} {print}' \\
       normalised.gff3 > ${gff_out}
-
-    # Protein extraction (gffread) is in EXTRACT_PROTEINS: gffread is not in the
-    # AGAT container.
 
     if [ ! -s "${gff_out}" ]; then
         echo "ERROR: ${gff_out} is empty after annotation merge" >&2
@@ -569,7 +454,7 @@ process MERGE_ANNOTATIONS {
 
     stub:
     """
-    printf '##gff-version 3\\n' > ${params.species_name}.v${params.annotation_version}.gff3
+    printf '##gff-version 3\\n' > ${params.species_name}.v${params.version}.gff3
     echo "MERGE_ANNOTATIONS stub completed"
     
     cat <<-END_VERSIONS > versions.yml
@@ -582,7 +467,6 @@ process MERGE_ANNOTATIONS {
 // ============================================================
 // Process: EXTRACT_PROTEINS
 // Protein FASTA from the merged GFF3 (consumed by functional annotation).
-// Separate from MERGE_ANNOTATIONS because gffread is not in the AGAT container.
 // ============================================================
 process EXTRACT_PROTEINS {
     label 'structural_env'
@@ -630,19 +514,8 @@ process EXTRACT_PROTEINS {
 }
 
 // ============================================================
-// Workflow composition (STRUCTURAL_ANNOTATION) now lives in
-// ../subworkflows/07_structural_annotation.nf — this file only
-// defines the individual processes.
-// ============================================================
-
-// ============================================================
 // Process: GT_GFF3_VALIDATE
 // Strict GFF3 spec validation with GenomeTools.
-//
-// WHY ITS OWN PROCESS: MERGE_ANNOTATIONS previously ran `gt gff3validator`
-// inside the AGAT container, which does not ship GenomeTools -- so that line
-// could only ever fail. Rather than hunting for a mulled AGAT+GT image, this
-// keeps one tool per container, which is how the rest of the pipeline is built.
 // ============================================================
 process GT_GFF3_VALIDATE {
     label 'structural_env'
@@ -661,8 +534,6 @@ process GT_GFF3_VALIDATE {
 
     script:
     """
-    # gt gff3validator exits non-zero on a spec violation, which should fail the
-    # run: a malformed GFF3 propagates into functional annotation and submission.
     gt gff3validator ${gff3} > gff3_validation.txt 2>&1 || {
         echo "ERROR: ${gff3} failed GFF3 spec validation:" >&2
         cat gff3_validation.txt >&2

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""WP10 / step 8: map final scaffold names to the input assembly names by sequence MD5.
+"""Map final scaffold names to the input assembly names by sequence MD5.
 
 Sequences are compared upper-cased, so soft-masking does not matter; a reverse-complement match is
-reported as such. If the screening step (0d) changed sequences, pass the scaffolds before 0d with
+reported as such. If the contamination screens changed sequences, pass the scaffolds before the screens with
 --untrimmed (same names) and they are matched through that sequence.
 
 usage: scaffold_name_map.py input_assembly.fa final_scaffolds.fa out.tsv [--untrimmed untrimmed.fa]

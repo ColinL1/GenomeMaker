@@ -1,7 +1,7 @@
 // ============================================================
 // 02b_select_best_assembly.nf
-// Rank assemblers by BUSCO completeness (penalizing duplication)
-// with N50 as a tie-breaker, and select the winner.
+// Rank assemblers (bin/rank.py): size outliers last; within the BUSCO tie band
+// the assembly closest to the expected size wins; N50 breaks a size tie.
 // ============================================================
 
 nextflow.enable.dsl = 2
@@ -14,10 +14,9 @@ process RANK_ASSEMBLIES {
     publishDir "${params.outdir}/02_assembly/selection", mode: params.publish_mode
 
     input:
-    path gfastats_reports    // ${name}.gfastats.txt  (name-embedded filenames)
-    path busco_summaries     // ${name}.${lineage}.short_summary.txt, HOST lineage only
-    path quast_reports       // ${name}_quast_report/ dirs -- QUAST was previously computed and then unused
-    path rank_script
+    path gfastats_reports
+    path busco_summaries     // host lineage only
+    path quast_reports
     val  expected_genome_size
 
     output:
@@ -26,16 +25,13 @@ process RANK_ASSEMBLIES {
     path "versions.yml", emit: versions
 
     script:
-    // EXPECTED_GENOME_SIZE lets the ranking reject an assembly whose total length
-    // is wildly off the GenomeScope2 estimate -- a doubled assembly can score well
-    // on BUSCO completeness while being badly wrong. Empty/0 disables the check.
+    // Expected haploid size (params.genome_size or GenomeScope2); required by rank.py.
     def expected = (expected_genome_size ?: 0)
     """
-    PYTHON=\$(command -v python3 || command -v python) || { echo "ERROR: no python interpreter found" >&2; exit 1; }
     export EXPECTED_GENOME_SIZE='${expected}'
     export SIZE_TOLERANCE='${params.assembly_size_tolerance}'
     export BUSCO_TIE_BAND='${params.busco_tie_band}'
-    \$PYTHON ${rank_script}
+    rank.py
     
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -47,7 +43,8 @@ process RANK_ASSEMBLIES {
     stub:
     """
     echo "flye" > best_assembler.txt
-    touch assembly_ranking.tsv
+    printf 'assembler\tcomplete_pct\tduplicated_pct\tN50\ttotal_bp\tsize_dev\tsize_check\tquast_contigs\tquast_largest_contig\tselected\tdecided_by\n' > assembly_ranking.tsv
+    printf 'flye\t98.0\t1.0\t1000000\t600000000\t+0.000\tok\t\t\tyes\tstub\n' >> assembly_ranking.tsv
     echo "RANK_ASSEMBLIES stub completed"
     
     cat <<-END_VERSIONS > versions.yml

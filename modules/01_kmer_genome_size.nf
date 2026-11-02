@@ -25,10 +25,7 @@ process MERYL_COUNT {
     path "versions.yml", emit: versions
 
     script:
-    // meryl defaults to ALL cores and ALL memory on the host, ignoring the
-    // scheduler's allocation -- under SLURM that oversubscribes the node and can
-    // get the job killed. threads=/memory= bind it to what Nextflow asked for.
-    // memory= is in GB.
+    // meryl otherwise uses every core and all memory on the host (memory= in GB)
     """
     meryl count \\
       k=${params.kmer_size} \\
@@ -120,15 +117,6 @@ process GENOMESCOPE {
     path "versions.yml", emit: versions
 
     script:
-    // GenomeScope2 from a container, replacing the vendored config/bin/genomescope.R
-    // -- that script was GenomeScope *1.0* (its own header cites
-    // schatzlab/genomescope) despite every comment here claiming 2.0. v1 has no
-    // ploidy model, which matters for a highly heterozygous coral.
-    //
-    // The old positional call also passed a read length of 150 for ONT reads that
-    // are kilobases long. GenomeScope2 takes no read-length argument at all -- it
-    // only ever affected coverage reporting, never the haploid-length estimate --
-    // so the parameter disappears rather than needing a corrected value.
     """
     awk 'BEGIN{OFS=" "}{print \$1, \$2}' ${meryl_hist} > kmer_db.meryl.hist.clean
 
@@ -182,8 +170,9 @@ process PARSE_GENOME_SIZE {
         | sed -E 's/^Genome Haploid Length[[:space:]]+([0-9,]+) bp.*/\\1/' \\
         | tr -d ',')
 
-    if [ -z "\$GENOME_SIZE" ]; then
-        echo "ERROR: could not parse Genome Haploid Length from \$SUMMARY" >&2
+    # GenomeScope writes NA when the model does not fit; the sed then leaves the whole line
+    if ! [[ "\$GENOME_SIZE" =~ ^[0-9]+\$ ]]; then
+        echo "ERROR: could not parse Genome Haploid Length from \$SUMMARY (got '\$GENOME_SIZE'); set --genome_size" >&2
         exit 1
     fi
     echo "Parsed genome size: \$GENOME_SIZE bp"

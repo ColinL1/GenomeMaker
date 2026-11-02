@@ -1,9 +1,9 @@
 // ============================================================
 // 03d_scaffold.nf
-// Reference-guided scaffolding with RagTag, AFTER purge_dups and contamination
-// removal: haplotigs are purged while they are still separate contigs (RagTag would
+// Reference-guided scaffolding with RagTag, AFTER purge_dups and the contamination
+// screens: haplotigs are purged while they are still separate contigs (RagTag would
 // otherwise place both haplotypes side by side inside a chromosome), and
-// contaminant contigs are never placed into chromosomes.
+// contaminant contigs are never placed into chromosomes. Then the name map.
 // ============================================================
 
 nextflow.enable.dsl = 2
@@ -48,5 +48,33 @@ process RAGTAG_SCAFFOLD {
     cp ${contigs} ragtag.scaffold.fasta
     touch ragtag.scaffold.agp ragtag.scaffold.stats ragtag.scaffold.confidence.txt
     printf '"${task.process}":\\n    ragtag: stub\\n' > versions.yml
+    """
+}
+
+// Final scaffold names -> RagTag scaffold names (by sequence MD5; FUNANNOTATE_SORT only renames):
+// which scaffold_N is which reference-chromosome scaffold (<ref>_RagTag). Run only with RagTag.
+process SCAFFOLD_NAME_MAP {
+    label 'res_light'
+    tag   "scaffold_name_map"
+
+    conda 'conda-forge::python=3.12'
+    container 'quay.io/biocontainers/python:3.12'
+    publishDir "${params.outdir}/03d_scaffolding/sorted", mode: params.publish_mode
+
+    input:
+    path presort, stageAs: 'presort/*'
+    path final_fasta, stageAs: 'final/*'
+
+    output:
+    path "scaffold_name_map.tsv", emit: map
+
+    script:
+    """
+    scaffold_name_map.py ${presort} ${final_fasta} scaffold_name_map.tsv
+    """
+
+    stub:
+    """
+    touch scaffold_name_map.tsv
     """
 }

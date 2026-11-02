@@ -1,10 +1,6 @@
 // ============================================================
 // main.nf — Coral Genome Assembly & Annotation Pipeline
 // ============================================================
-// params.busco_lineage — single lineage, e.g. 'anthozoa_odb12'.
-// One BUSCO pass only, used for assembler comparison/ranking and for
-// tagging host contigs during BlobToolKit filtering. No symbiont lineage.
-// ============================================================
 
 nextflow.enable.dsl = 2
 
@@ -14,33 +10,46 @@ include { MULTI_ASSEMBLER }        from './subworkflows/02_multi_assembler.nf'
 include { SELECT_BEST_ASSEMBLY }   from './subworkflows/02b_select_best_assembly.nf'
 include { INPUT_ASSEMBLY_QC }      from './subworkflows/02c_input_assembly_qc.nf'
 include { PURGE_DUPS }             from './subworkflows/03b_purge_dups.nf'
-// Aliased so each checkpoint's outputs stay distinct.
 include { ASSEMBLY_CHECKPOINT as CHECKPOINT_PURGED   } from './subworkflows/02d_assembly_checkpoint.nf'
 include { ASSEMBLY_CHECKPOINT as CHECKPOINT_FILTERED } from './subworkflows/02d_assembly_checkpoint.nf'
+include { ASSEMBLY_CHECKPOINT as CHECKPOINT_FINAL    } from './subworkflows/02d_assembly_checkpoint.nf'
+include { PURGE_QC_GATE ; LENGTH_FILTER } from './modules/03b_purge_dups.nf'
+include { REMOVE_MITO_CONTIGS }    from './modules/05_mitogenome.nf'
+include { FUNANNOTATE_SORT }       from './modules/04_assembly_polish.nf'
+include { MERQURY_QV as MERQURY_FINAL } from './modules/04_assembly_polish.nf'
 include { ASSEMBLY_FILTERING }     from './subworkflows/03_assembly_filtering.nf'
 include { ASSEMBLY_POLISHING }     from './subworkflows/04_assembly_polish.nf'
 include { MITOGENOME_PIPELINE }    from './subworkflows/05_mitogenome.nf'
 include { REPEATS_PIPELINE }       from './subworkflows/06_repeats.nf'
 include { STRUCTURAL_ANNOTATION }  from './subworkflows/07_structural_annotation.nf'
 include { FUNCTIONAL_ANNOTATION }  from './subworkflows/08_functional_annotation.nf'
-include { RUN_SUMMARY }            from './subworkflows/09_summary.nf'
+include { RUN_SUMMARY ; methods_template } from './subworkflows/09_summary.nf'
+include { GENOME_SUMMARY ; METHODS ; FINAL_ASSEMBLE ; PUBLISH_MULTIQC } from './modules/09_summary.nf'
 include { SCREEN_ASSEMBLY }        from './subworkflows/03c_screens.nf'
-include { RAGTAG_SCAFFOLD }        from './modules/03d_scaffold.nf'
+include { RAGTAG_SCAFFOLD ; SCAFFOLD_NAME_MAP } from './modules/03d_scaffold.nf'
+include { READS_TO_FASTA ; TGS_GAPFILL ; GAPFILL_AGP ; GAPFILL_REPORT } from './modules/03e_gapfill.nf'
+include { MEDAKA_POLISH as MEDAKA_GAPFILL } from './modules/04_assembly_polish.nf'
+include { GFASTATS_QC as GFASTATS_GAPFILL } from './modules/02_multi_assembler.nf'
+include { BUSCO_ASSEMBLY as BUSCO_NUCLEAR } from './modules/02_multi_assembler.nf'
 include { RELEASE }                from './subworkflows/10_release.nf'
 include { linkage_evidence ; ncbi_linkage_terms } from './modules/10_release.nf'
 
+// Placeholder for an absent optional input (assets/NO_*)
+def no_file(name) {
+    return file("${projectDir}/assets/${name}", checkIfExists: true)
+}
+
 workflow CORAL_GENOME_PIPELINE {
 
-    // ---- Start-of-run checks: settings the late stages need, checked before any task runs
+    // ---- Start-of-run checks
     def missing = []
     if (params.run_screens.toString().toBoolean()) {
-        ['univec', 'fcs_gx_db', 'fcs_adaptor_image', 'fcs_gx_image', 'fcs_tax_id'].each { k ->
+        ['univec', 'fcs_gx_db', 'fcs_adaptor_image', 'fcs_gx_image', 'taxon_id'].each { k ->
             if (!params[k]) missing << "--${k}"
         }
     }
-    if (params.run_release.toString().toBoolean() && params.run_functional_annotation.toString().toBoolean()) {
+    if (params.run_release.toString().toBoolean()) {
         ['table2asn', 'ncbi_species', 'locus_tag', 'ncbi_sbt', 'ncbi_cmt', 'bioproject', 'biosample'].each { k -> if (!params[k]) missing << "--${k}" }
-        // accessions go into every .sqn record: a wrong one attaches the genome to someone else's project
         if (params.bioproject && !(params.bioproject.toString() ==~ /PRJ[DEN][A-Z]\d+/)) {
             error "bioproject '${params.bioproject}' is not a BioProject accession (PRJNA..., PRJEB..., PRJDB...)"
         }
@@ -52,11 +61,11 @@ workflow CORAL_GENOME_PIPELINE {
         }
         if (params.ncbi_linkage_evidence && !(linkage_evidence() in ncbi_linkage_terms())) {
             error "ncbi_linkage_evidence '${params.ncbi_linkage_evidence}' is not an NCBI linkage-evidence term: " +
-                  ncbi_linkage_terms().join(', ')
+                    ncbi_linkage_terms().join(', ')
         }
         if (params.ncbi_species && params.ncbi_species.toString().contains('_')) {
             error "ncbi_species '${params.ncbi_species}' contains '_': use the organism name exactly as in the BioSample " +
-                  "(NCBI cannot resolve it otherwise, and the record loses its lineage)"
+                    "(NCBI cannot resolve it otherwise, and the record loses its lineage)"
         }
         if (!(params.ncbi_isolate || params.ncbi_strain)) {
             missing << '--ncbi_isolate or --ncbi_strain (NCBI requires one with a locus-tag prefix)'
@@ -64,14 +73,16 @@ workflow CORAL_GENOME_PIPELINE {
     }
     if (missing) {
         error "Missing settings: ${missing.join(', ')}.\n" +
-              "Set them, or switch the stage off (--run_screens false / --run_release false)."
+                "Set them, or switch the stage off (--run_screens false / --run_release false)."
     }
 
     def ont_reads_ch = channel.fromPath(params.ont_raw_reads, checkIfExists: true)
 
-    def symbiont_path = params.symbiont_refs
-        ? file(params.symbiont_refs.split(',').collect { s -> s.trim() }.find { s -> s }, checkIfExists: true)
-        : null
+    // chopper --contam takes one FASTA: several symbionts go in one concatenated file
+    if (params.symbiont_refs && params.symbiont_refs.toString().contains(',')) {
+        error "symbiont_refs takes one FASTA, not a list: '${params.symbiont_refs}'. "
+    }
+    def symbiont_path = params.symbiont_refs ? file(params.symbiont_refs, checkIfExists: true) : null
     def symbiont_ch = channel.value(symbiont_path ?: [])
 
     def necat_config_path   = (params.necat_config && file(params.necat_config).exists()) ? file(params.necat_config) : null
@@ -92,43 +103,91 @@ workflow CORAL_GENOME_PIPELINE {
     def eggnogdb_path = (params.eggnog_db && file(params.eggnog_db).exists()) ? file(params.eggnog_db) : null
     def eggnogdb_ch   = channel.value(eggnogdb_path ?: [])
 
-    // Reference DBs / bundled helper scripts referenced by absolute host path
-    // inside container script blocks. These MUST be declared as Nextflow
-    // `path` process inputs (not interpolated straight from params) so that
-    // apptainer/singularity/docker's automatic bind-mounting (autoMounts)
-    // knows to expose the real host path inside the container -- otherwise
-    // only the task work directory is bound and these paths are invisible
-    // to the container even though they resolve fine outside of Nextflow.
+    // Raise error early for missing inputs that are required for the run configuration
+    def use_input_assembly = params.input_assembly as boolean
+    if (!use_input_assembly && !params.genome_size && !params.run_genomescope.toString().toBoolean()) {
+        error "The assembler ranking needs an expected genome size: set --genome_size, or --run_genomescope true"
+    }
+    def run_mito = params.run_mitogenome.toString().toBoolean()
+    if (run_mito && !mito_ref_path) {
+        error "run_mitogenome=true needs --mito_ref (a related mitogenome FASTA); '${params.mito_ref}' does not exist. " +
+                "Set it, or --run_mitogenome false (the nuclear assembly is then not checked for mito contigs)"
+    }
+    def run_structural = params.run_structural_annotation.toString().toBoolean()
+    if (run_structural) {
+        def absent = []
+        if (!rnaseq_dir_path)   absent << "--rnaseq_dir (${params.rnaseq_dir})"
+        if (!protein_refs_path) absent << "--protein_refs (${params.protein_refs})"
+        if (absent) {
+            error "run_structural_annotation=true, but these inputs do not exist: ${absent.join(', ')}. " +
+                    "Set them, or --run_structural_annotation false"
+        }
+        if (!params.run_repeats.toString().toBoolean()) {
+            error "run_structural_annotation=true requires run_repeats=true: BRAKER runs with --softmasking " +
+                    "and needs the repeat-softmasked assembly stage 06 produces"
+        }
+        if (!workflow.stubRun) {
+            def braker_missing = []
+            if (!file("${params.braker4_dir}/Snakefile").exists())             braker_missing << "--braker4_dir ${params.braker4_dir} (no Snakefile)"
+            if (!file("${params.braker4_snakemake_env}/bin/snakemake").exists()) braker_missing << "--braker4_snakemake_env ${params.braker4_snakemake_env} (no bin/snakemake)"
+            if (braker_missing) {
+                error "BRAKER4 is not set up: ${braker_missing.join('; ')}. See README.md, section 'BRAKER4 setup'"
+            }
+        }
+        if (!(params.braker4_executor in ['local', 'slurm'])) {
+            error "braker4_executor must be 'local' or 'slurm', not '${params.braker4_executor}'"
+        }
+        if (params.run_haplotig_scan.toString().toBoolean() && !params.n_chromosome_scaffolds) {
+            error "run_haplotig_scan=true needs --n_chromosome_scaffolds (the chromosome-scale scaffolds the copies are searched on)"
+        }
+    }
+    def run_functional = params.run_functional_annotation.toString().toBoolean()
+    if (run_functional && !run_structural) {
+        error "run_functional_annotation=true requires run_structural_annotation=true (it annotates the gene models)"
+    }
+    if (run_functional) {
+        def absent = []
+        if (!funodb_path)   absent << "--funannotate_db (${params.funannotate_db})"
+        if (!eggnogdb_path) absent << "--eggnog_db (${params.eggnog_db})"
+        if (absent) {
+            error "run_functional_annotation=true, but these inputs do not exist: ${absent.join(', ')}. " +
+                    "Set them, or --run_functional_annotation false"
+        }
+    }
+    // The release curation works on the finished annotation: structural and functional must run.
+    def run_release = params.run_release.toString().toBoolean()
+    if (run_release && !(run_structural && run_functional)) {
+        error "run_release=true requires run_structural_annotation=true and run_functional_annotation=true"
+    }
+    // Gap filling runs on the RagTag scaffolds: on with RagTag unless run_gapfill=false, off without RagTag
+    def run_gapfill = params.run_gapfill.toString().toBoolean() && (params.scaffold_reference as boolean)
+    def run_gapfill_polish = run_gapfill && params.run_gapfill_polish.toString().toBoolean()
+
+    // Host paths used inside containers must be `path` inputs so they get bind-mounted
     def blast_db_path      = file(params.blast_db)
-    def blast_taxdump_path = file("${blast_db_path.getParent()}/new_taxdump")
+    def blast_taxdump_path = file(params.blast_taxdump ?: "${blast_db_path.getParent()}/new_taxdump")
+    if (params.run_blobtools.toString().toBoolean() && !workflow.stubRun) {
+        if (!file("${blast_db_path}/core_nt.nal").exists()) {
+            error "BLASTN_NT needs the core_nt database folder: ${blast_db_path} has no core_nt.nal. Set --blast_db to the folder, not the prefix"
+        }
+        if (!file("${blast_taxdump_path}/nodes.dmp").exists()) {
+            error "BlobToolKit needs the NCBI new_taxdump folder: ${blast_taxdump_path} has no nodes.dmp. Set --blast_taxdump"
+        }
+    }
     def diamond_db_path    = file(params.diamond_db)
     def trimmomatic_adapters_path = file(params.trimmomatic_adapters)
 
-    // BUSCO offline lineage dir is optional; fall back to a placeholder
-    // that Nextflow can stage even though it doesn't exist -- BUSCO_ASSEMBLY
-    // only actually references it when params.busco_offline_dir is set.
+    // optional inputs fall back to the NO_FILE placeholder
     def busco_offline_path = (params.busco_offline_dir && file(params.busco_offline_dir).exists())
         ? file(params.busco_offline_dir)
         : file("${projectDir}/assets/NO_FILE", checkIfExists: true)
     def busco_offline_ch = channel.value(busco_offline_path)
 
-    def rank_script_path               = file("${params.bin_path}rank.py")
-    def combine_comparison_script_path = file("${params.bin_path}combine_comparison.py")
-
-    // Optional MultiQC config (e.g. custom module order / titles). Falls back
-    // to a harmless placeholder if params.multiqc_config isn't set, and the
-    // MULTIQC process skips -c when it sees that placeholder name.
     def multiqc_config_path = (params.multiqc_config && file(params.multiqc_config).exists())
         ? file(params.multiqc_config)
         : file("${projectDir}/assets/NO_FILE", checkIfExists: true)
     def multiqc_config_ch = channel.value(multiqc_config_path)
 
-    // Fasta-assembly input mode: skip read preprocessing that only exists to
-    // build a de novo assembly (k-mer genome size estimation, the
-    // multi-assembler comparison, and best-assembly selection). ONT reads
-    // are still required -- purge_dups coverage, BlobToolKit filtering,
-    // polishing, and mitogenome extraction all need them.
-    def use_input_assembly = params.input_assembly as boolean
     def input_assembly_path = use_input_assembly
         ? file(params.input_assembly, checkIfExists: true)
         : null
@@ -141,25 +200,17 @@ workflow CORAL_GENOME_PIPELINE {
     def porechopped_ch  = PREPROCESS_READS.out.reads_pc
     def assembly_reads  = PREPROCESS_READS.out.assembly_reads
     def polish_reads    = PREPROCESS_READS.out.polishing_reads
-    // High-quality subset, k-mer genome sizing only (see CHOPPER_HQ_READS).
     def kmer_reads      = PREPROCESS_READS.out.kmer_reads
-
-    // Raw, MultiQC-parseable read QC (FastQC zips, NanoPlot/NanoStat text) for
-    // both the raw and trimmed stages. Previously this globbed the per-stage
-    // MultiQC *output* directories and fed those back into the final MultiQC,
-    // which produces nothing parseable.
+    
+    // Read QC of the raw and trimmed reads
     def read_qc_ch = PREPROCESS_READS.out.raw_qc_files
 
-    // Every process reports its own tool version at runtime; those files are
-    // accumulated here and collated in RUN_SUMMARY. Conditional stages mix inside
-    // their branch, so a skipped stage simply contributes nothing.
+    // Per-process versions.yml files, collated in RUN_SUMMARY
     def versions_ch = PREPROCESS_READS.out.versions
 
     // ===========================
     // 01a. READ K-MER DATABASE
-    // Built outside the genome-sizing branch because TWO consumers need it:
-    // GenomeScope2 (de novo path only) and Merqury polishing QV (both paths,
-    // including --input_assembly). Skipped only when neither is active.
+    // Used by GenomeScope2 and Merqury
     // ===========================
     def needs_sizing = !use_input_assembly && params.run_genomescope.toString().toBoolean() && !params.genome_size
     def needs_meryl  = needs_sizing || params.run_polish_qc.toString().toBoolean()
@@ -175,18 +226,16 @@ workflow CORAL_GENOME_PIPELINE {
         log.info "Skipping read k-mer database (no genome sizing and run_polish_qc=false)"
     }
 
-    // Channels the final MultiQC recap collects from optional/branching stages.
-    // Declared up front so both pipeline paths can fill or leave them empty.
+    // Filled by optional stages for the MultiQC report
     def genomescope_out_ch = channel.empty()
     def quast_reports_ch   = channel.empty()
-    def repeat_summary_ch  = channel.empty()
+    def repeat_tbl_ch      = channel.empty()
     def star_logs_ch       = channel.empty()
     def gff3_validation_ch = channel.empty()
     def compleasm_ch       = channel.empty()
     def omark_ch           = channel.empty()
     def ncrna_ch           = channel.empty()
     def stringtie_ch       = channel.empty()
-
     def all_gfastats_ch
     def all_busco_ch
     def busco_summary_ch
@@ -201,9 +250,8 @@ workflow CORAL_GENOME_PIPELINE {
 
         INPUT_ASSEMBLY_QC(
             channel.value(input_assembly_path),
-            params.busco_lineage,    // single lineage, e.g. anthozoa_odb12
-            busco_offline_ch,
-            combine_comparison_script_path
+            params.busco_lineage,
+            busco_offline_ch
         )
 
         all_gfastats_ch        = INPUT_ASSEMBLY_QC.out.gfastats
@@ -218,24 +266,17 @@ workflow CORAL_GENOME_PIPELINE {
         // ===========================
         // 01. K-MER GENOME SIZE ESTIMATION
         // ===========================
-        // Genome size: an explicit params.genome_size always wins; otherwise
-        // estimate it with GenomeScope2 if run_genomescope is on. With neither,
-        // the assemblers run without a size hint (Flye and hifiasm both accept
-        // that) -- warn, because it changes their behaviour.
         def genome_size_est
         if (params.genome_size) {
             log.info "Using supplied genome_size=${params.genome_size}; skipping k-mer estimation"
             genome_size_est = channel.value(params.genome_size)
         }
-        else if (params.run_genomescope.toString().toBoolean()) {
+        else {
+            // run_genomescope=true here: the start-up check stops the run without either
             KMER_GENOME_SIZE(meryl_hist_ch)
             genome_size_est    = KMER_GENOME_SIZE.out.genome_size
             genomescope_out_ch = KMER_GENOME_SIZE.out.genomescope_out
             versions_ch        = versions_ch.mix(KMER_GENOME_SIZE.out.versions)
-        }
-        else {
-            log.warn "run_genomescope=false and no params.genome_size: assemblers will run without a genome-size hint"
-            genome_size_est = channel.value([])
         }
 
         // ===========================
@@ -246,10 +287,9 @@ workflow CORAL_GENOME_PIPELINE {
             necat_config_ch,
             necat_readlist_ch,
             genome_size_est,
-            params.busco_lineage,    // single lineage, e.g. anthozoa_odb12
+            params.busco_lineage,
             necat_bin_ch,
-            busco_offline_ch,
-            combine_comparison_script_path
+            busco_offline_ch
         )
 
         def all_assemblies_ch = MULTI_ASSEMBLER.out.assemblies
@@ -262,15 +302,13 @@ workflow CORAL_GENOME_PIPELINE {
         versions_ch            = versions_ch.mix(MULTI_ASSEMBLER.out.versions)
 
         // ===========================
-        // 02b. SELECT BEST ASSEMBLY (data-driven, not alphabetical)
-        // Ranks by BUSCO completeness (penalizing duplication), N50 tie-break.
+        // 02b. SELECT BEST ASSEMBLY (bin/rank.py)
         // ===========================
         SELECT_BEST_ASSEMBLY(
             all_assemblies_ch,
             all_gfastats_ch,
             busco_summary_ch,
             MULTI_ASSEMBLER.out.quast_reports,
-            rank_script_path,
             genome_size_est
         )
 
@@ -282,125 +320,16 @@ workflow CORAL_GENOME_PIPELINE {
 
     selected_name_ch.view { name -> "Selected assembler: ${name}" }
 
-    // ===========================
-    // 02c. PURGE_DUPS
-    // Remove duplicated haplotigs from the selected assembly using
-    // ONT coverage, before contamination filtering / polishing.
-    // ===========================
-    PURGE_DUPS(selected_assembly_path, assembly_reads)
-    def purged_assembly_path = PURGE_DUPS.out.purged_assembly
-    def haplotigs_path       = PURGE_DUPS.out.haplotigs
-    versions_ch = versions_ch.mix(PURGE_DUPS.out.versions)
+    // BUSCO full_table.tsv of the selected assembly
+    def selected_busco_table = all_busco_ch.combine(selected_name_ch)
+        .filter { name, _p, sel -> name == sel }
+        .map    { _n, p, _s -> p }
+        .first()
 
     // ===========================
-    // 02d. CHECKPOINT -- measure the assembly AFTER purge_dups
-    //
-    // This serves two purposes at once, which is why it is not optional:
-    //   1. QC. purge_dups deletes sequence; without a measurement here there is
-    //      no way to tell a correct haplotig purge from an over-aggressive one.
-    //   2. CORRECTNESS. BLOBTOOLS_ADD_BUSCO must be given a BUSCO table computed
-    //      on the SAME assembly the BlobDir was built from. It used to receive the
-    //      table from the pre-purge selected assembly, but `get_seqs -e` renames
-    //      split contigs, so those rows matched nothing -- and blobtools drops
-    //      unmatched rows SILENTLY, leaving an empty BUSCO track.
-    // ===========================
-    CHECKPOINT_PURGED(
-        purged_assembly_path,
-        'purged',
-        params.busco_lineage,
-        busco_offline_ch
-    )
-    versions_ch = versions_ch.mix(CHECKPOINT_PURGED.out.versions)
-
-    // ===========================
-    // 03. ASSEMBLY FILTERING (BlobToolKit)
-    // ===========================
-    ASSEMBLY_FILTERING(
-        purged_assembly_path,
-        porechopped_ch,
-        // The full_table.tsv computed on the PURGED assembly -- the same sequences
-        // the BlobDir is built from. Two earlier bugs lived on this line: it passed
-        // a short_summary.txt (no per-contig rows at all), and it passed the
-        // pre-purge assembly's table (contig IDs renamed by get_seqs -e). Both
-        // produced an empty BUSCO track with no warning.
-        CHECKPOINT_PURGED.out.busco_table.first(),
-        blast_db_path,
-        blast_taxdump_path,
-        diamond_db_path
-    )
-
-    def filtered_assembly_ch = ASSEMBLY_FILTERING.out.filtered_assembly
-    def symbiont_assembly_ch = ASSEMBLY_FILTERING.out.symbiont_assembly
-    versions_ch = versions_ch.mix(ASSEMBLY_FILTERING.out.versions)
-
-    // ===========================
-    // 03c. CHECKPOINT -- measure the assembly AFTER contamination filtering
-    //
-    // Purely QC, so it is behind a toggle. Its value is the DELTA against the
-    // purged checkpoint above: that difference is exactly how much sequence the
-    // taxon filter removed, which is the number the methods section needs and the
-    // one that would reveal an over-aggressive filter.
-    // ===========================
-    def filtered_busco_ch    = channel.empty()
-    def filtered_gfastats_ch = channel.empty()
-    if (params.run_assembly_checkpoints.toString().toBoolean()) {
-        CHECKPOINT_FILTERED(
-            filtered_assembly_ch.first(),
-            'filtered',
-            params.busco_lineage,
-            busco_offline_ch
-        )
-        filtered_busco_ch    = CHECKPOINT_FILTERED.out.busco_summary
-        filtered_gfastats_ch = CHECKPOINT_FILTERED.out.gfastats
-        versions_ch = versions_ch.mix(CHECKPOINT_FILTERED.out.versions)
-    } else {
-        log.info "Skipping the post-filtering QC checkpoint (run_assembly_checkpoints=false)"
-    }
-
-    // ===========================
-    // 03c. CONTAMINATION SCREENS (FCS-adaptor, VecScreen, FCS-GX) on the host-filtered
-    // contigs, before scaffolding. Unclear hits stop the run for review
-    // (params.screen_decisions). The sequence is not changed after this step.
-    // ===========================
-    def screened_ch  = filtered_assembly_ch
-    def screen_qc_ch = channel.empty()
-    if (params.run_screens.toString().toBoolean()) {
-        SCREEN_ASSEMBLY(filtered_assembly_ch.first())
-        screened_ch  = SCREEN_ASSEMBLY.out.screened
-        screen_qc_ch = SCREEN_ASSEMBLY.out.qc_files
-        versions_ch  = versions_ch.mix(SCREEN_ASSEMBLY.out.versions)
-    } else {
-        log.warn "Contamination screens SKIPPED (run_screens=false); QC gate G9 reports 'not run'"
-    }
-
-    // ===========================
-    // 03d. SCAFFOLDING (RagTag), when params.scaffold_reference is set: after purge_dups
-    // and the screens, so haplotigs and contaminants are never placed into chromosomes.
-    // ===========================
-    def scaffolds_ch = screened_ch
-    if (params.scaffold_reference) {
-        RAGTAG_SCAFFOLD(screened_ch, file(params.scaffold_reference, checkIfExists: true))
-        scaffolds_ch = RAGTAG_SCAFFOLD.out.scaffolds
-        versions_ch  = versions_ch.mix(RAGTAG_SCAFFOLD.out.versions)
-    }
-
-    // ===========================
-    // 04. ASSEMBLY POLISHING
-    // ===========================
-    ASSEMBLY_POLISHING(
-        scaffolds_ch,
-        polish_reads,
-        params.busco_lineage,
-        busco_offline_ch,
-        meryl_db_ch
-    )
-
-    def final_assembly_ch = ASSEMBLY_POLISHING.out.final_assembly
-    def final_busco_ch    = ASSEMBLY_POLISHING.out.busco_tables
-    versions_ch = versions_ch.mix(ASSEMBLY_POLISHING.out.versions)
-
-    // ===========================
-    // 05. MITOGENOME EXTRACTION (optional)
+    // 05. MITOGENOME. 
+    // MitoHiFi runs on the selected assembly; the contigs it identifies are also 
+    // removed from the nuclear assembly, so the mitogenome is not released twice.
     // ===========================
     def mito_bam_ch       = channel.empty()
     def mito_bai_ch       = channel.empty()
@@ -409,8 +338,9 @@ workflow CORAL_GENOME_PIPELINE {
     def mito_fasta_ch     = channel.empty()
     def mito_gff_ch       = channel.empty()
     def mito_check_ch     = channel.empty()
+    def mito_removed_ch   = channel.empty()
 
-    def run_mito = params.run_mitogenome.toString().toBoolean() && mito_ref_path
+    def nuclear_contigs_ch = selected_assembly_path
     if (run_mito) {
         // Optional Illumina shotgun DNA of the same individual (comma-separated
         // lists, R1 and R2 in the same order) -> GetOrganelle route.
@@ -435,16 +365,216 @@ workflow CORAL_GENOME_PIPELINE {
         mito_gff_ch       = MITOGENOME_PIPELINE.out.mito_gff
         mito_check_ch     = MITOGENOME_PIPELINE.out.mito_check
         versions_ch       = versions_ch.mix(MITOGENOME_PIPELINE.out.versions)
+
+        REMOVE_MITO_CONTIGS(
+            selected_assembly_path,
+            MITOGENOME_PIPELINE.out.mito_contig_ids.ifEmpty(file("${projectDir}/assets/NO_MITO_IDS", checkIfExists: true)),
+            MITOGENOME_PIPELINE.out.mito_contig_stats.ifEmpty(file("${projectDir}/assets/NO_MITO_STATS", checkIfExists: true)),
+            mito_ref_path)
+        nuclear_contigs_ch = REMOVE_MITO_CONTIGS.out.fasta
+        mito_removed_ch    = REMOVE_MITO_CONTIGS.out.report
+        versions_ch        = versions_ch.mix(REMOVE_MITO_CONTIGS.out.versions)
     } else {
-        log.info "Skipping mitogenome extraction (run_mitogenome=${params.run_mitogenome}, mito_ref=${params.mito_ref})"
+        log.warn "Mitogenome stage off (run_mitogenome=false): the nuclear assembly is NOT checked for mitochondrial contigs"
     }
 
     // ===========================
-    // 06. REPEAT ANNOTATION (optional)
+    // 04. POLISHING (Medaka) of the contigs, and the polish QC gate
+    // ===========================
+    def btk_contigs_ch     = nuclear_contigs_ch
+    def btk_busco_table    = selected_busco_table
+    def polish_busco_ch    = channel.empty()   // prepolish / postpolish BUSCO summaries
+    def polish_decision_ch = channel.empty()   // polish_decision.txt
+    def polish_report_ch   = channel.empty()
+    def polish_gate_mqc_ch = channel.empty()
+    def merqury_pre_ch     = channel.empty()
+    def merqury_post_ch    = channel.empty()
+    if (params.run_polish.toString().toBoolean()) {
+        ASSEMBLY_POLISHING(
+            nuclear_contigs_ch,
+            polish_reads,
+            params.busco_lineage,
+            busco_offline_ch,
+            meryl_db_ch
+        )
+        btk_contigs_ch     = ASSEMBLY_POLISHING.out.contigs
+        btk_busco_table    = ASSEMBLY_POLISHING.out.busco_table
+        polish_busco_ch    = ASSEMBLY_POLISHING.out.busco_stage_summaries
+        polish_decision_ch = ASSEMBLY_POLISHING.out.polish_decision
+        polish_report_ch   = ASSEMBLY_POLISHING.out.polish_qc_report
+        polish_gate_mqc_ch = ASSEMBLY_POLISHING.out.polish_gate_mqc
+        merqury_pre_ch     = ASSEMBLY_POLISHING.out.merqury_pre
+        merqury_post_ch    = ASSEMBLY_POLISHING.out.merqury_post
+        versions_ch        = versions_ch.mix(ASSEMBLY_POLISHING.out.versions)
+    } else {
+        log.info "Skipping polishing (run_polish=false)"
+        if (run_mito) {
+            BUSCO_NUCLEAR(nuclear_contigs_ch.map { p -> ['nuclear', p] }, channel.value(params.busco_lineage), busco_offline_ch)
+            btk_busco_table = BUSCO_NUCLEAR.out.busco_table.map { _n, p -> p }.first()
+            versions_ch     = versions_ch.mix(BUSCO_NUCLEAR.out.versions)
+        }
+    }
+
+    // ===========================
+    // 03. BLOBTOOLKIT SPLIT (host | symbiont | other) on the unpurged contigs, so the
+    // symbiont bin is decided by taxonomy before purge_dups' coverage cutoffs see it.
+    // ===========================
+    ASSEMBLY_FILTERING(
+        btk_contigs_ch,
+        porechopped_ch,
+        btk_busco_table,
+        blast_db_path,
+        blast_taxdump_path,
+        diamond_db_path
+    )
+    def host_ch              = ASSEMBLY_FILTERING.out.filtered_assembly
+    def symbiont_assembly_ch = ASSEMBLY_FILTERING.out.symbiont_assembly
+    versions_ch = versions_ch.mix(ASSEMBLY_FILTERING.out.versions)
+
+    def run_purge = params.run_purge_dups.toString().toBoolean()
+
+    // CHECKPOINT after the split (02d_assembly_checkpoint): what the taxon filter kept, and
+    // the before-measurement of the purge QC gate (so it always runs with purge_dups on).
+    def filtered_busco_ch    = channel.empty()
+    def filtered_gfastats_ch = channel.empty()
+    if (run_purge || params.run_assembly_checkpoints.toString().toBoolean()) {
+        CHECKPOINT_FILTERED(host_ch, 'filtered', params.busco_lineage, busco_offline_ch)
+        filtered_busco_ch    = CHECKPOINT_FILTERED.out.busco_summary
+        filtered_gfastats_ch = CHECKPOINT_FILTERED.out.gfastats
+        versions_ch = versions_ch.mix(CHECKPOINT_FILTERED.out.versions)
+    }
+
+    // ===========================
+    // 03b. PURGE_DUPS on the host bin, the purge QC gate, then the length filter
+    // ===========================
+    def purged_ch            = host_ch
+    def purge_gate_ch        = channel.value('skipped')
+    def purged_busco_ch      = channel.empty()
+    def purged_gfastats_ch   = channel.empty()
+    def purge_gate_mqc_ch    = channel.empty()
+    def purge_report_ch      = channel.empty()
+    if (run_purge) {
+        PURGE_DUPS(host_ch, assembly_reads)
+        versions_ch = versions_ch.mix(PURGE_DUPS.out.versions)
+
+        CHECKPOINT_PURGED(PURGE_DUPS.out.purged_assembly, 'purged', params.busco_lineage, busco_offline_ch)
+        purged_busco_ch    = CHECKPOINT_PURGED.out.busco_summary
+        purged_gfastats_ch = CHECKPOINT_PURGED.out.gfastats
+        versions_ch = versions_ch.mix(CHECKPOINT_PURGED.out.versions)
+
+        // A FAIL stops the run here; a WARN is printed and the run continues.
+        PURGE_QC_GATE(CHECKPOINT_FILTERED.out.busco_summary, CHECKPOINT_PURGED.out.busco_summary, PURGE_DUPS.out.cutoffs)
+        PURGE_QC_GATE.out.status.subscribe { f ->
+            def t = f.text.trim()
+            if (t != 'PASS') { log.warn "purge_dups QC gate: ${t}" }
+        }
+        purged_ch         = PURGE_DUPS.out.purged_assembly
+        purge_gate_ch     = PURGE_QC_GATE.out.status
+        purge_gate_mqc_ch = PURGE_QC_GATE.out.mqc
+        purge_report_ch   = PURGE_QC_GATE.out.report
+        versions_ch = versions_ch.mix(PURGE_QC_GATE.out.versions)
+    } else {
+        log.warn "purge_dups SKIPPED (run_purge_dups=false): haplotigs are not removed"
+    }
+    LENGTH_FILTER(purged_ch, purge_gate_ch)
+    def contigs_ch = LENGTH_FILTER.out.fasta
+    versions_ch = versions_ch.mix(LENGTH_FILTER.out.versions)
+
+    // ===========================
+    // 03c. CONTAMINATION SCREENS (FCS-adaptor, VecScreen, FCS-GX) on the final contigs.
+    // Unclear hits stop the run for review (params.screen_decisions). This is the last step
+    // that changes bases: RagTag adds gaps, the sort renames.
+    // ===========================
+    def screened_ch  = contigs_ch
+    def screen_qc_ch = channel.empty()
+    if (params.run_screens.toString().toBoolean()) {
+        SCREEN_ASSEMBLY(contigs_ch)
+        screened_ch  = SCREEN_ASSEMBLY.out.screened.first()
+        screen_qc_ch = SCREEN_ASSEMBLY.out.qc_files
+        versions_ch  = versions_ch.mix(SCREEN_ASSEMBLY.out.versions)
+    } else {
+        log.warn "Contamination screens SKIPPED (run_screens=false); the release QC reports the screen checks as 'not run'"
+    }
+
+    // ===========================
+    // 03d. SCAFFOLDING (RagTag), when params.scaffold_reference is set, then the sort:
+    // scaffolds by size, renamed <scaffold_basename>_1..N. With RagTag, the name map records
+    // which scaffold_N is which RagTag (reference chromosome) scaffold.
+    // ===========================
+    def scaffolds_ch = screened_ch
+    def agp_ch       = channel.value(file("${projectDir}/assets/NO_AGP", checkIfExists: true))
+    def name_map_ch  = channel.value(file("${projectDir}/assets/NO_NAME_MAP", checkIfExists: true))
+    // the sequence the release check compares the released FASTA with (N runs split it into segments)
+    def scaffold_input_ch = screened_ch
+    def gapfill_mqc_ch    = channel.empty()
+    if (params.scaffold_reference) {
+        RAGTAG_SCAFFOLD(screened_ch, file(params.scaffold_reference, checkIfExists: true))
+        scaffolds_ch = RAGTAG_SCAFFOLD.out.scaffolds
+        agp_ch       = RAGTAG_SCAFFOLD.out.agp
+        versions_ch  = versions_ch.mix(RAGTAG_SCAFFOLD.out.versions)
+    }
+
+    // ===========================
+    // 03e. GAP FILLING (params.run_gapfill): TGS-GapCloser --ne on the RagTag scaffolds, then
+    // Medaka (run_gapfill_polish). The AGP is rebuilt from the remaining N runs.
+    // ===========================
+    if (run_gapfill) {
+        READS_TO_FASTA(porechopped_ch)
+        TGS_GAPFILL(RAGTAG_SCAFFOLD.out.scaffolds, READS_TO_FASTA.out.fasta)
+        def gapfilled_ch = TGS_GAPFILL.out.scaffolds
+        versions_ch = versions_ch.mix(READS_TO_FASTA.out.versions, TGS_GAPFILL.out.versions)
+
+        def gapfill_stats_in = RAGTAG_SCAFFOLD.out.scaffolds.map { f -> ['gapfill_ragtag', f] }
+            .mix(TGS_GAPFILL.out.scaffolds.map { f -> ['gapfill_tgs', f] })
+        if (run_gapfill_polish) {
+            MEDAKA_GAPFILL(TGS_GAPFILL.out.scaffolds, polish_reads)
+            gapfilled_ch = MEDAKA_GAPFILL.out.medaka_assembly
+            gapfill_stats_in = gapfill_stats_in.mix(gapfilled_ch.map { f -> ['gapfill_medaka', f] })
+            versions_ch = versions_ch.mix(MEDAKA_GAPFILL.out.versions)
+        }
+        gapfilled_ch = gapfilled_ch.first()
+
+        GAPFILL_AGP(gapfilled_ch, RAGTAG_SCAFFOLD.out.agp)
+        GFASTATS_GAPFILL(gapfill_stats_in)
+        def gapfill_stats = GFASTATS_GAPFILL.out.gfastats_report
+        GAPFILL_REPORT(
+            TGS_GAPFILL.out.detail,
+            RAGTAG_SCAFFOLD.out.agp,
+            gapfill_stats.filter { n, _f -> n == 'gapfill_ragtag' }.map { _n, f -> f },
+            gapfill_stats.filter { n, _f -> n == 'gapfill_tgs' }.map { _n, f -> f },
+            gapfill_stats.filter { n, _f -> n == 'gapfill_medaka' }.map { _n, f -> f }.ifEmpty(no_file('NO_FILE'))
+        )
+        scaffolds_ch      = gapfilled_ch
+        scaffold_input_ch = gapfilled_ch
+        agp_ch            = GAPFILL_AGP.out.agp
+        gapfill_mqc_ch    = GAPFILL_REPORT.out.mqc
+        versions_ch = versions_ch.mix(GAPFILL_AGP.out.versions, GFASTATS_GAPFILL.out.versions, GAPFILL_REPORT.out.versions)
+    }
+    FUNANNOTATE_SORT(scaffolds_ch, params.scaffold_basename)
+    def final_assembly_ch = FUNANNOTATE_SORT.out.final_assembly
+    versions_ch = versions_ch.mix(FUNANNOTATE_SORT.out.versions)
+    if (params.scaffold_reference) {
+        SCAFFOLD_NAME_MAP(scaffolds_ch, final_assembly_ch)
+        name_map_ch = SCAFFOLD_NAME_MAP.out.map
+    }
+
+    // CHECKPOINT of the final assembly: the numbers the summary and the methods report
+    CHECKPOINT_FINAL(final_assembly_ch, 'final', params.busco_lineage, busco_offline_ch)
+    versions_ch = versions_ch.mix(CHECKPOINT_FINAL.out.versions)
+    def final_qv_ch = channel.empty()
+    if (params.run_polish_qc.toString().toBoolean()) {
+        MERQURY_FINAL(final_assembly_ch, meryl_db_ch, 'final')
+        final_qv_ch = MERQURY_FINAL.out.qv.map { _stage, qv -> qv }
+        versions_ch = versions_ch.mix(MERQURY_FINAL.out.versions)
+    }
+
+    // ===========================
+    // 06. REPEAT ANNOTATION
     // ===========================
     def masked_assembly_ch = channel.empty()
     def repeat_out_ch      = channel.empty()
-    // Outputs with no MultiQC module, formatted as custom content by RUN_SUMMARY.
+    def repeat_files_ch    = channel.empty()   
+
     def report_files_ch = ASSEMBLY_FILTERING.out.report_files
     if (run_mito) {
         report_files_ch = report_files_ch.mix(MITOGENOME_PIPELINE.out.report_files)
@@ -453,44 +583,21 @@ workflow CORAL_GENOME_PIPELINE {
     if (params.run_repeats.toString().toBoolean()) {
         REPEATS_PIPELINE(final_assembly_ch)
         masked_assembly_ch = REPEATS_PIPELINE.out.masked_assembly
-        repeat_summary_ch  = REPEATS_PIPELINE.out.repeat_summary
-        repeat_out_ch      = REPEATS_PIPELINE.out.repeat_tbl     // RepeatMasker .out
+        repeat_tbl_ch      = REPEATS_PIPELINE.out.repeat_tbl
+        repeat_out_ch      = REPEATS_PIPELINE.out.repeat_out
+        repeat_files_ch    = REPEATS_PIPELINE.out.repeat_out.mix(REPEATS_PIPELINE.out.repeat_tbl,
+                                                                    REPEATS_PIPELINE.out.repeat_gff, REPEATS_PIPELINE.out.repeat_lib)
         report_files_ch    = report_files_ch.mix(REPEATS_PIPELINE.out.rrna_gff)
         versions_ch        = versions_ch.mix(REPEATS_PIPELINE.out.versions)
     } else {
-        // No COPY_FILE passthrough here any more. masked_assembly_ch is consumed
-        // ONLY by structural and functional annotation, and both now require
-        // run_repeats=true (enforced above), so with repeats off this channel has
-        // no consumer at all. Copying the assembly to satisfy a channel nobody
-        // reads was dead work -- and COPY_FILE's entire reason to exist.
         log.info "Skipping repeat annotation (run_repeats=false); structural/functional annotation unavailable"
     }
 
     // ===========================
-    // 07. STRUCTURAL ANNOTATION (optional)
+    // 07. STRUCTURAL ANNOTATION
     // ===========================
     def gff3_ch        = channel.empty()
     def proteins_faa_ch = channel.empty()
-
-    def run_structural = params.run_structural_annotation.toString().toBoolean() && rnaseq_dir_path && protein_refs_path
-
-    // BRAKER is run with --softmasking, which requires a repeat-softmasked genome.
-    // Rather than making that flag conditional (and silently giving BRAKER an
-    // unmasked genome via the COPY_FILE branch), repeats are a PREREQUISITE for
-    // structural annotation: the RepeatMasker -xsmall output is passed straight
-    // through, so masking is computed once and reused rather than left to BRAKER.
-    if (run_structural && !params.run_repeats.toString().toBoolean()) {
-        error """
-        run_structural_annotation=true requires run_repeats=true.
-
-        BRAKER runs with --softmasking and needs the repeat-softmasked assembly
-        that stage 06 produces. Without it BRAKER would receive an unmasked genome
-        and predict genes across transposable elements.
-
-        Either enable repeats (run_repeats=true) or disable structural annotation
-        (run_structural_annotation=false).
-        """.stripIndent()
-    }
 
     if (run_structural) {
         STRUCTURAL_ANNOTATION(
@@ -511,8 +618,8 @@ workflow CORAL_GENOME_PIPELINE {
         report_files_ch    = report_files_ch.mix(
             STRUCTURAL_ANNOTATION.out.trnascan_out,
             STRUCTURAL_ANNOTATION.out.braker_results,
-            STRUCTURAL_ANNOTATION.out.gff3,                 // refined.gff3
-            STRUCTURAL_ANNOTATION.out.refined_validation,   // gt_refined.txt
+            STRUCTURAL_ANNOTATION.out.gff3,                 
+            STRUCTURAL_ANNOTATION.out.refined_validation,   
             STRUCTURAL_ANNOTATION.out.trna_hc)
         versions_ch        = versions_ch.mix(STRUCTURAL_ANNOTATION.out.versions)
     } else {
@@ -520,20 +627,16 @@ workflow CORAL_GENOME_PIPELINE {
     }
 
     // ===========================
-    // 08. FUNCTIONAL ANNOTATION (optional)
+    // 08. FUNCTIONAL ANNOTATION
     // ===========================
     def anno_dir_ch  = channel.empty()
     def stats_json_ch = channel.value([])
 
-    def run_functional = params.run_functional_annotation.toString().toBoolean() && run_structural
-    // The release needs the refined models and the functional evidence.
-    def run_release    = params.run_release.toString().toBoolean() && run_functional
     if (run_functional) {
         FUNCTIONAL_ANNOTATION(masked_assembly_ch, gff3_ch, proteins_faa_ch, funodb_ch, eggnogdb_ch)
         anno_dir_ch   = FUNCTIONAL_ANNOTATION.out.anno_dir
         stats_json_ch = FUNCTIONAL_ANNOTATION.out.stats_json
-        // Phobius may be a NO_ placeholder. With the release on, the report describes the
-        // release's (NCBI) annotation instead of this first funannotate pass (below).
+        // With the release on, the report describes the release's (NCBI) annotation instead of this first funannotate pass (below).
         report_files_ch = report_files_ch.mix(
             FUNCTIONAL_ANNOTATION.out.phobius.filter { f -> !f.name.startsWith('NO_') })
         if (!run_release) {
@@ -544,20 +647,44 @@ workflow CORAL_GENOME_PIPELINE {
         log.info "Skipping functional annotation (run_functional_annotation=${params.run_functional_annotation}, structural_annotation_ran=${run_structural})"
     }
 
-    report_files_ch = report_files_ch.mix(screen_qc_ch)   // screen actions and review (03c)
+    // Decision files of the automatic steps: MultiQC tables and the methods text
+    report_files_ch = report_files_ch.mix(screen_qc_ch, mito_removed_ch, LENGTH_FILTER.out.removed, ranking_table_ch)
+
+    // The final assembly as delivered: soft-masked when repeats ran
+    def delivered_fasta_ch = params.run_repeats.toString().toBoolean() ? masked_assembly_ch : final_assembly_ch
+    def anno_or_none_ch    = run_functional ? anno_dir_ch : channel.value(no_file('NO_FILE'))
+
+    // ---- summary.tsv of the automatic product (final/qc/)
+    GENOME_SUMMARY(
+        'final',
+        delivered_fasta_ch,
+        anno_or_none_ch,
+        no_file('NO_FILE'), 
+        compleasm_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        CHECKPOINT_FINAL.out.busco_summary,
+        final_qv_ch.collect().ifEmpty([no_file('NO_QV')]),
+        repeat_tbl_ch.collect().ifEmpty([no_file('NO_FILE')]), 
+        no_file('NO_FILE'),                                     
+        mito_fasta_ch.collect().ifEmpty([no_file('NO_MITO_FASTA')]),
+        mito_check_ch.collect().ifEmpty([no_file('NO_MITO_CHECK')]),
+        no_file('NO_SYMBIONT_BUSCO')                            
+    )
+    def summary_tsv_ch = GENOME_SUMMARY.out.summary
 
     // ===========================
-    // 10. RELEASE: NCBI submission file, QC gate, release folder (before the summary,
-    // so the MultiQC report describes the released annotation)
+    // 10. RELEASE CURATION
     // ===========================
     if (run_release) {
         RELEASE(
-            masked_assembly_ch.first(),
-            ASSEMBLY_POLISHING.out.presort_assembly.first(),
+            masked_assembly_ch,
+            name_map_ch,
+            agp_ch,
+            scaffold_input_ch,
             gff3_ch,
             STRUCTURAL_ANNOTATION.out.refine_splits,
             STRUCTURAL_ANNOTATION.out.refine_tags,
             STRUCTURAL_ANNOTATION.out.refine_report,
+            STRUCTURAL_ANNOTATION.out.trna_pseudogenes,
             STRUCTURAL_ANNOTATION.out.protein_identity,
             proteins_faa_ch,
             STRUCTURAL_ANNOTATION.out.refined_validation,
@@ -567,31 +694,49 @@ workflow CORAL_GENOME_PIPELINE {
             FUNCTIONAL_ANNOTATION.out.iprscan,
             FUNCTIONAL_ANNOTATION.out.phobius,
             funodb_ch,
-            REPEATS_PIPELINE.out.repeat_tbl.mix(REPEATS_PIPELINE.out.repeat_summary,
-                                                REPEATS_PIPELINE.out.repeat_gff, REPEATS_PIPELINE.out.repeat_lib),
+            repeat_files_ch,
             REPEATS_PIPELINE.out.repeat_lib,
             REPEATS_PIPELINE.out.classify_report,
-            ASSEMBLY_FILTERING.out.symbiont_assembly,
+            symbiont_assembly_ch,
             mito_fasta_ch,
             mito_gff_ch,
             mito_check_ch,
-            ASSEMBLY_POLISHING.out.busco_summaries.first(),
-            ASSEMBLY_POLISHING.out.final_qv,
-            screen_qc_ch,
-            versions_ch
+            CHECKPOINT_FINAL.out.busco_summary,
+            final_qv_ch,
+            compleasm_ch,
+            screen_qc_ch
         )
-        stats_json_ch   = RELEASE.out.anno.map { d -> file("${d}/annotate_results/*.stats.json") }
-                              .map { l -> l instanceof List ? l[0] : l }
-        report_files_ch = report_files_ch.mix(RELEASE.out.anno, RELEASE.out.summary,
-                                              RELEASE.out.ncbi.flatten().filter { f -> f.name.endsWith('.val') })
+        stats_json_ch   = RELEASE.out.stats_json
+        summary_tsv_ch  = RELEASE.out.summary
+        report_files_ch = report_files_ch.mix(RELEASE.out.anno, RELEASE.out.qc_gate,
+                                                RELEASE.out.ncbi.flatten().filter { f -> f.name.endsWith('.val') || f.name == 'in.stats' })
         versions_ch     = versions_ch.mix(RELEASE.out.versions)
         // An empty upstream channel would skip the gate and the folder without failing the run.
         RELEASE.out.release.ifEmpty { error "The release was not built: an input of the QC gate or the release folder was empty" }
     }
+    report_files_ch = report_files_ch.mix(summary_tsv_ch)
+
+    // ---- methods text: the steps that ran, their versions and the automatic decisions
+    def methods_tpl_ch = channel.of(methods_template([input_assembly: use_input_assembly, mito: run_mito,
+                                                        structural: run_structural, functional: run_functional,
+                                                        release: run_release, gapfill: run_gapfill,
+                                                        gapfill_polish: run_gapfill_polish]))
+        .collectFile(name: 'methods_template.md', newLine: true)
+    METHODS(
+        methods_tpl_ch,
+        versions_ch.collectFile(name: 'all_versions.yml', newLine: true, sort: { f -> f.text }),
+        ranking_table_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        polish_report_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        polish_decision_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        purge_report_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        mito_removed_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        LENGTH_FILTER.out.removed,
+        screen_qc_ch.filter { f -> f.name == 'screen_actions.tsv' }.collect().ifEmpty([no_file('NO_FILE')])
+    )
+    report_files_ch = report_files_ch.mix(METHODS.out.methods)
 
     // ===========================
     // 09. SUMMARY + INTEGRATED MULTIQC REPORT
-    // Routed through a subworkflow like every other stage.
     // ===========================
     def multiqc_input_ch = channel.empty()
         // 00 -- read QC, raw and trimmed, so adapter/quality trimming is visible
@@ -603,50 +748,67 @@ workflow CORAL_GENOME_PIPELINE {
         .mix(all_gfastats_ch.map     { name, p -> p })
         .mix(all_busco_ch.map        { name, p -> p })
         .mix(busco_summary_ch.map    { name, p -> p })
-        // 02b -- which assembler was chosen and why
-        .mix(ranking_table_ch)
         .mix(comparison_ch)
         .mix(comparison_json_ch)
-        // 04 -- polishing: BUSCO both sides (+ the final product's if the gate fell
-        // back to the unpolished assembly), Merqury QV, and the gate verdict
-        .mix(final_busco_ch)
-        .mix(ASSEMBLY_POLISHING.out.busco_stage_summaries)
-        .mix(ASSEMBLY_POLISHING.out.merqury_pre.map  { stage, p -> p })
-        .mix(ASSEMBLY_POLISHING.out.merqury_post.map { stage, p -> p })
-        .mix(ASSEMBLY_POLISHING.out.polish_qc_report)
-        .mix(ASSEMBLY_POLISHING.out.polish_gate_mqc)
-        // 03b/03c -- what purge_dups and the taxon filter actually removed
-        .mix(CHECKPOINT_PURGED.out.busco_summary)
-        .mix(CHECKPOINT_PURGED.out.gfastats)
+        // 04 -- polishing: BUSCO and Merqury QV on both sides of the gate, and its verdict
+        .mix(polish_busco_ch)
+        .mix(merqury_pre_ch.map  { stage, p -> p })
+        .mix(merqury_post_ch.map { stage, p -> p })
+        .mix(polish_report_ch)
+        .mix(polish_gate_mqc_ch)
+        // 03/03b -- what the taxon split and purge_dups removed (checkpoints), and the purge gate
         .mix(filtered_busco_ch)
         .mix(filtered_gfastats_ch)
-        // 03 -- ONT coverage alignment rate against the purged assembly
+        .mix(purged_busco_ch)
+        .mix(purged_gfastats_ch)
+        .mix(purge_gate_mqc_ch)
+        // 03e -- gap filling: gaps, joins, fills and contig N50 after each step
+        .mix(gapfill_mqc_ch)
+        // final assembly: the delivered product
+        .mix(CHECKPOINT_FINAL.out.busco_summary)
+        .mix(CHECKPOINT_FINAL.out.gfastats)
+        .mix(final_qv_ch)
+        // 03 -- ONT coverage alignment rate against the split input
         .mix(ASSEMBLY_FILTERING.out.coverage_flagstat)
         // 05 -- mitogenome coverage
         .mix(mito_coverage_ch)
         .mix(mito_flagstat_ch)
         // 06 -- repeat content
-        .mix(repeat_summary_ch)
+        .mix(repeat_tbl_ch)
         // 07 -- RNA-seq alignment rates and annotation validation
         .mix(star_logs_ch)
         .mix(gff3_validation_ch)
-        // 07b -- annotation completeness. OMArk is the INDEPENDENT metric: BRAKER's
-        // own BUSCO is optimised against BUSCO via --busco_lineage, so it is circular.
+        // 07b -- annotation completeness (OMArk is independent of BRAKER's BUSCO tuning)
         .mix(compleasm_ch)
         .mix(omark_ch)
         .mix(ncrna_ch)
         .mix(stringtie_ch)
         // 08 -- functional annotation yield
         .mix(stats_json_ch.filter { it })
-        // all stages -- software provenance
 
+    // Run facts for the MultiQC run overview (mode, strategy, switches)
+    def run_facts_ch = channel.of(([
+            "mode\t${use_input_assembly ? 'from assembly (--input_assembly)' : 'from reads'}",
+            "strategy\t${run_release ? 'automatic + release curation' : 'automatic'}",
+            "mitogenome\t${run_mito ? 'on' : 'off'}",
+            "polishing\t${params.run_polish.toString().toBoolean() ? 'on' : 'off'}",
+            "polish_qc_gate\t${params.run_polish_qc.toString().toBoolean() ? 'on' : 'off'}",
+            "blobtoolkit\t${params.run_blobtools.toString().toBoolean() ? 'on' : 'off'}",
+            "purge_dups\t${run_purge ? 'on' : 'off'}",
+            "screens\t${params.run_screens.toString().toBoolean() ? 'on' : 'off'}",
+            "ragtag\t${params.scaffold_reference ? 'on' : 'off'}",
+            "gapfill\t${run_gapfill ? 'on' : 'off'}",
+        ] + (run_gapfill ? ["gapfill_polish\t${run_gapfill_polish ? 'on' : 'off'}"] : []) + [
+            "repeats\t${params.run_repeats.toString().toBoolean() ? 'on' : 'off'}",
+            "structural_annotation\t${run_structural ? 'on' : 'off'}",
+            "functional_annotation\t${run_functional ? 'on' : 'off'}",
+        ]).join('\n')).collectFile(name: 'run_facts.tsv', newLine: true)
+    report_files_ch = report_files_ch.mix(run_facts_ch)
 
     RUN_SUMMARY(
         all_gfastats_ch.map { name, p -> p },
-        all_busco_ch.map { name, p -> p }.mix(final_busco_ch),
-        // polishing-stage BUSCO summaries + the gate decision, so the summary can
-        // say which assembly is the final product
-        ASSEMBLY_POLISHING.out.busco_stage_summaries.mix(ASSEMBLY_POLISHING.out.polish_decision),
+        all_busco_ch.map { name, p -> p },
+        polish_busco_ch.mix(polish_decision_ch, CHECKPOINT_FINAL.out.busco_summary),
         comparison_ch,
         comparison_json_ch,
         stats_json_ch,
@@ -655,6 +817,27 @@ workflow CORAL_GENOME_PIPELINE {
         multiqc_config_ch,
         versions_ch
     )
+
+    // ===========================
+    // OUTPUT
+    // ===========================
+    def final_qc_ch = channel.empty().mix(GENOME_SUMMARY.out.summary, METHODS.out.methods, ranking_table_ch,
+            polish_report_ch, polish_decision_ch, purge_report_ch, mito_removed_ch, LENGTH_FILTER.out.removed,
+            screen_qc_ch, CHECKPOINT_FINAL.out.busco_summary, final_qv_ch)
+        .unique { f -> f.name }.collect().ifEmpty([no_file('NO_FILE')])
+    FINAL_ASSEMBLE(
+        delivered_fasta_ch,
+        name_map_ch,
+        anno_or_none_ch,
+        repeat_files_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        mito_fasta_ch.mix(mito_gff_ch, mito_check_ch).collect().ifEmpty([no_file('NO_MITO_FASTA')]),
+        symbiont_assembly_ch.collect().ifEmpty([no_file('NO_FILE')]),
+        final_qc_ch,
+        RUN_SUMMARY.out.report
+    )
+    if (run_release) {
+        PUBLISH_MULTIQC(RUN_SUMMARY.out.report, RELEASE.out.release)
+    }
 
 }
 
