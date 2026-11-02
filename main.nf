@@ -30,6 +30,7 @@ include { RAGTAG_SCAFFOLD ; SCAFFOLD_NAME_MAP } from './modules/03d_scaffold.nf'
 include { READS_TO_FASTA ; TGS_GAPFILL ; GAPFILL_AGP ; GAPFILL_REPORT } from './modules/03e_gapfill.nf'
 include { MEDAKA_POLISH as MEDAKA_GAPFILL } from './modules/04_assembly_polish.nf'
 include { GFASTATS_QC as GFASTATS_GAPFILL } from './modules/02_multi_assembler.nf'
+include { BUSCO_ASSEMBLY as BUSCO_NUCLEAR } from './modules/02_multi_assembler.nf'
 include { RELEASE }                from './subworkflows/10_release.nf'
 include { linkage_evidence ; ncbi_linkage_terms } from './modules/10_release.nf'
 
@@ -407,6 +408,11 @@ workflow CORAL_GENOME_PIPELINE {
         versions_ch        = versions_ch.mix(ASSEMBLY_POLISHING.out.versions)
     } else {
         log.info "Skipping polishing (run_polish=false)"
+        if (run_mito) {
+            BUSCO_NUCLEAR(nuclear_contigs_ch.map { p -> ['nuclear', p] }, channel.value(params.busco_lineage), busco_offline_ch)
+            btk_busco_table = BUSCO_NUCLEAR.out.busco_table.map { _n, p -> p }.first()
+            versions_ch     = versions_ch.mix(BUSCO_NUCLEAR.out.versions)
+        }
     }
 
     // ===========================
@@ -416,8 +422,6 @@ workflow CORAL_GENOME_PIPELINE {
     ASSEMBLY_FILTERING(
         btk_contigs_ch,
         porechopped_ch,
-        // full_table.tsv computed on the SAME contigs the BlobDir is built from:
-        // any other table gives an empty BUSCO track with no warning.
         btk_busco_table,
         blast_db_path,
         blast_taxdump_path,
