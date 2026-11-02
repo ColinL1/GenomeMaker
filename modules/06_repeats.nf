@@ -130,8 +130,9 @@ process EDTA_RUN {
     label 'repeats_env'
     tag   "edta"
 
-    conda 'bioconda::edta'
-    container 'quay.io/biocontainers/edta:2.3.0--hdfd78af_0'
+    // TIR-Learner 4: the biocontainer's TIR-Learner 3.0.2 crashes under pandas 3 (KeyError: 0), so no TIRs
+    conda 'bioconda::edta=2.3.0 bioconda::tir-learner=4.08'
+    container 'oras://community.wave.seqera.io/library/edta_tir-learner:f137297b45b5e446'
     publishDir "${params.outdir}/06_repeats/edta", mode: params.publish_mode
 
     input:
