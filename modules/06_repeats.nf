@@ -248,8 +248,8 @@ process REPEATMASKER_RUN {
 
     output:
     path "masked_assembly.fasta", emit: masked_assembly
-    path "repeatmasker.out",      emit: repeat_tbl
-    path "repeatmasker.tbl",      emit: repeat_summary
+    path "repeatmasker.out",      emit: repeat_out
+    path "repeatmasker.tbl",      emit: repeat_tbl
     path "versions.yml", emit: versions
 
     script:
