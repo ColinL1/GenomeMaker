@@ -242,7 +242,7 @@ The full list, with comments, is in `nextflow.config`. The most used ones:
 | `--input_assembly` | `null` | Existing assembly; skips k-mer sizing and assembly |
 | `--outdir` | `results` | Output directory |
 | `--species_name` | `Porites_sp` | Name used in output file names |
-| `--symbiont_refs` | `null` | Symbiont reference genome(s) for read removal (comma-separated) |
+| `--symbiont_refs` | `null` | Symbiont reference FASTA for read removal |
 | `--genome_size` | `null` | Haploid genome size in bp; null = GenomeScope 2 estimate (one of the two is required from reads) |
 | `--version` | `1.0` | Version of the assembly + annotation (GFF3 file name) |
 | `--busco_lineage` | `anthozoa_odb12` | BUSCO lineage for all assembly QC and BRAKER4 |

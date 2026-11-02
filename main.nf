@@ -77,9 +77,11 @@ workflow CORAL_GENOME_PIPELINE {
 
     def ont_reads_ch = channel.fromPath(params.ont_raw_reads, checkIfExists: true)
 
-    def symbiont_path = params.symbiont_refs
-        ? file(params.symbiont_refs.split(',').collect { s -> s.trim() }.find { s -> s }, checkIfExists: true)
-        : null
+    // chopper --contam takes one FASTA: several symbionts go in one concatenated file
+    if (params.symbiont_refs && params.symbiont_refs.toString().contains(',')) {
+        error "symbiont_refs takes one FASTA, not a list: '${params.symbiont_refs}'. "
+    }
+    def symbiont_path = params.symbiont_refs ? file(params.symbiont_refs, checkIfExists: true) : null
     def symbiont_ch = channel.value(symbiont_path ?: [])
 
     def necat_config_path   = (params.necat_config && file(params.necat_config).exists()) ? file(params.necat_config) : null
